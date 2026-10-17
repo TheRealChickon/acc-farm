@@ -158,7 +158,7 @@ function workspace:GetServerTimeNow() M.now += 0.0005 return M.now end
 -- remotes, in a folder like the game's
 local net = newInstance("Folder", "network@eventDefinitions") net.Parent = RS
 for _, n in ipairs({ "fightBattleTowerWave", "setPartyPosition", "removePartyPosition", "forfeitBattle", "setBattleSessionDisplayState",
-	"teleport", "fightStoryBoss", "fightInfinite", "pauseInfinite", "useBackpackItem", "claimDailyLogin", "claimDailyQuest" }) do
+	"teleport", "fightStoryBoss", "fightInfinite", "pauseInfinite", "useBackpackItem", "claimDailyLogin", "claimDailyQuest", "fightStorySkip" }) do
 	local r = newInstance("RemoteEvent", n) r.Parent = net
 end
 -- a debug copy that must be ignored
@@ -174,6 +174,19 @@ local timeMod = newInstance("ModuleScript", "time") timeMod.Parent = common
 local COMPS = { User = { name = "User" }, Location = { name = "Location" }, BattleSession = { name = "BattleSession" }, Boss = { name = "Boss" } }
 modules[compsMod] = COMPS
 modules[timeMod] = { EST_OFFSET_SECONDS = 5 * 3600 }
+-- Story Skip: M.skipWorlds[world] = {bosses, diff, claimed, win}
+M.skipWorlds = {}
+local gameFolder = newInstance("Folder", "game") gameFolder.Parent = shared
+local skipMod = newInstance("ModuleScript", "storySkip") skipMod.Parent = gameFolder
+local resultMod = newInstance("ModuleScript", "result") resultMod.Parent = common
+modules[resultMod] = { isOk = function(r) return r.success == true end }
+modules[skipMod] = { getAvailableRepeatRewards = function(world, _progress)
+	local w = M.skipWorlds[world]
+	if not w then return { success = false } end
+	local cd = {}
+	if w.claimed then for i = 1, w.bosses do cd["b" .. i] = true end end
+	return { success = true, value = { rewards = { "x", "y" }, bossCount = w.bosses, onCooldown = cd, highestDifficulty = w.diff } }
+end }
 local realRequire = require
 require = function(x) if type(x) == "table" and modules[x] then return modules[x] end return realRequire(x) end
 
@@ -284,6 +297,8 @@ end
 M.towerWinUpTo = {}     -- [mode] = highest wave the deck wins
 M.storyWins = {}        -- ["world:diff:boss"] = true
 M.fightSeconds = 40
+M.skipFights = {}
+M.supports = { ["fox_cloak:basic"] = true, ["binding_vow:basic"] = true, ["mech_contract:basic"] = true, ["undead_staff:basic"] = true }
 local lastSendAt = -1e9
 local function fail(msg) table.insert(M.violations, msg) end
 local function newSession(v) nextEnt += 1 sessions[nextEnt] = v ctx.clientToServerEntities[nextEnt] = 9000 + nextEnt return nextEnt end
@@ -298,7 +313,7 @@ function M.onRemote(name, ...)
 		if args[1] ~= "slot_15" then fail("deck edit outside slot_15: " .. tostring(args[1])) return end
 		if name == "setPartyPosition" then
 			local card, pos = args[2], args[3]
-			local kind = string.find(card, "support", 1, true) and "support" or "attack"
+			local kind = (string.find(card, "support", 1, true) or M.supports[card]) and "support" or "attack"
 			slot15[kind][pos] = card
 		else
 			slot15[args[2]][args[3]] = nil
@@ -354,6 +369,20 @@ function M.onRemote(name, ...)
 		bp[t.item] -= t.amount
 	elseif name == "claimDailyQuest" then
 		for _, q in ipairs(user.questProgress.daily) do if q.idx == args[1] then q.claimed = true end end
+	elseif name == "fightStorySkip" then
+		local w, slot = M.skipWorlds[args[1]], args[2]
+		if slot ~= "slot_15" then fail("story skip with " .. tostring(slot)) end
+		if next(sessions) then fail("story skip started while another fight runs") end
+		local bp = user.inventories.main.backpack
+		if (bp.story_skip_key or 0) < 1 then fail("story skip without a key") return end
+		bp.story_skip_key -= 1
+		local e = newSession({ type = "story_skip", seed = math.floor(M.now), restartCount = 0 })
+		table.insert(M.skipFights, { world = args[1], at = M.now })
+		task.spawn(function()
+			task.wait(M.fightSeconds)
+			if not sessions[e] then return end
+			if w.win then sessions[e] = nil w.claimed = true else sessions[e].restartCount = 1 end
+		end)
 	elseif name == "fightInfinite" then
 		local e = newSession({ type = "infinite_tower", mode = args[1], floor = 1 })
 		task.spawn(function() while sessions[e] do task.wait(20) if sessions[e] then sessions[e].floor += 1 end end end)

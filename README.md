@@ -26,6 +26,7 @@ Then press **Farm running** on the Farm tab.
 | Daily login + quests | claims the daily login once a game day and finished daily quests |
 | Tower repeats (packs) | every tower floor whose daily repeat reward has instant packs (floor 25 of each main tower: Forest 500k rolls a day, Tremor 400k, Darkness 450k, ...), once per game day |
 | Story repeats (packs) | story boss repeats that drop instant packs (the last boss of every difficulty), once per game day |
+| Story Skip (keys) | uses one Story Skip key per world to collect that world's daily rewards in one fight, at a start second the PC says wins (needs `ss_watch.py` running on the PC; off by default, idle with 0 keys; Clover Hideout and Deity Planet off until they have a deck) |
 | Tower first clears | next uncleared floor of every tower you switched on (main towers, Dream parts, Mage parts) |
 | Story first clears | next uncleared story boss in game order |
 | Open instant packs | opens instant packs from your backpack (off by default) |

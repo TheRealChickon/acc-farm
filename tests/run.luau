@@ -123,7 +123,7 @@ local function findText(root, t) for _, d in ipairs(root:GetDescendants()) do if
 local first = farm.settings.order[1]
 local downs = {}
 for _, d in ipairs(gui:GetDescendants()) do if d.Text == "▼" then table.insert(downs, d) end end
-check(#downs == 7, "priority list has 7 rows (" .. #downs .. ")")
+check(#downs == 8, "priority list has 8 rows (" .. #downs .. ")")
 downs[1].MouseButton1Click:Fire()
 M.run(M.now + 1)
 check(farm.settings.order[2] == first, "moving the first task down changes the order")
@@ -156,5 +156,61 @@ check(M.user.inventories.main.backpack.instant_roll_100000 == 0, "then the packs
 farm.stop()
 M.run(M.now + 60)
 check(#M.violations == 0, "still no rule broken (" .. table.concat(M.violations, "; ") .. ")")
+
+log("7) Story Skip")
+for k in pairs(farm.settings.enabled) do farm.settings.enabled[k] = false end
+farm.settings.enabled.story_skip = true
+M.user.inventories.main.backpack.story_skip_key = 0
+M.skipWorlds = {
+	solo_city = { bosses = 6, diff = "celestial", win = true },
+	heros_palace = { bosses = 6, diff = "celestial", win = false },
+	green_planet = { bosses = 6, diff = "nightmare", win = true },          -- highest difficulty not planned: skipped
+	ninja_village = { bosses = 6, diff = "celestial", claimed = true },     -- nothing to claim today
+	clover_hideout = { bosses = 6, diff = "celestial", win = true },        -- off by default (no deck)
+}
+M.sent = {}
+M.files["AnimeCardClash/storyskip_want.json"] = nil
+task.spawn(farm.start)
+M.run(M.now + 120)
+check(M.files["AnimeCardClash/storyskip_want.json"] == nil, "no keys -> Story Skip stays off")
+check(findText(gui, "Story Skip keys: 0") ~= nil, "window shows 0 keys")
+farm.stop()
+M.run(M.now + 30)
+-- fake ss_watch.py: answers every want with safe seconds starting 20 s later
+local answered = 0
+task.spawn(function()
+	local last
+	while true do
+		task.wait(2)
+		local w = M.files["AnimeCardClash/storyskip_want.json"]
+		if w and w ~= last then
+			last = w
+			local want = HS:JSONDecode(w)
+			local safe = {} for i = 20, 200 do table.insert(safe, want.t + i) end
+			task.wait(15)
+			answered += 1
+			M.files["AnimeCardClash/storyskip_times_" .. want.world .. ".json"] = HS:JSONEncode({ world = want.world, made = want.t + 1, ok = true, winRate = 1,
+				deck = { { "sun_blaze_shinigami:gold", "fox_cloak:basic" }, { "awakened_sunblaze_shinigami:secret", "binding_vow:basic" }, { "sun_blaze_shinigami:gold", "mech_contract:basic" }, { "undead_king:rainbow", "undead_staff:basic" } },
+				safe = safe })
+		end
+	end
+end)
+M.user.inventories.main.backpack.story_skip_key = 5
+M.skipFights = {}
+task.spawn(farm.start)
+M.run(M.now + 1800)
+farm.stop()
+M.run(M.now + 60)
+local fought = {} for _, f in ipairs(M.skipFights) do fought[f.world] = (fought[f.world] or 0) + 1 end
+check(fought.solo_city == 1 and M.skipWorlds.solo_city.claimed, "Solo City fought once and won")
+check(fought.heros_palace == 1, "Hero's Palace lost once and not retried today")
+check(not fought.green_planet and not fought.ninja_village and not fought.clover_hideout, "worlds without celestial / without rewards / without a deck left alone")
+check(M.user.inventories.main.backpack.story_skip_key == 3, "two keys used")
+local onTime = true
+for _, x in ipairs(M.sent) do if x.name == "fightStorySkip" then local frac = x.at - math.floor(x.at) if frac < 0.3 or frac > 0.5 then onTime = false end end end
+check(onTime, "fired just after a planned second (+0.35 s)")
+check(next(M.sessions) == nil, "no Story Skip fight left open")
+check(findText(gui, "Story Skip keys: 3") ~= nil, "window shows 3 keys")
+check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
 
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))

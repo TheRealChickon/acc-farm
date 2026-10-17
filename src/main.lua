@@ -7,6 +7,7 @@ local decks = import("decks", core)
 local towers = import("tasks/towers", core, data, decks)
 local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
+local skip = import("tasks/storyskip", core)
 
 local SETTINGS_FILE = "acc-farm/settings.json"
 pcall(function() if not isfolder("acc-farm") then makefolder("acc-farm") end end)
@@ -16,6 +17,7 @@ local TASKS = {
 	{ id = "dailies", name = "Daily login + quests", on = true },
 	{ id = "tower_repeat", name = "Tower repeats (packs)", on = true },
 	{ id = "story_repeat", name = "Story repeats (packs)", on = true },
+	{ id = "story_skip", name = "Story Skip (needs keys + PC helper)", on = false },
 	{ id = "tower_clear", name = "Tower first clears", on = true },
 	{ id = "story_clear", name = "Story first clears", on = true },
 	{ id = "instant_packs", name = "Open instant packs", on = false },
@@ -26,6 +28,7 @@ local defaults = {
 	deckMode = "auto", timed = false, hideFights = true, maxLosses = 3, minRate = 0, fightTimeout = 900, memLimit = 4500,
 	repeatAll = false, storyDiffs = {}, storyRepeatAll = false, storyTowerWorld = "", storyTowerMinutes = 20,
 	packMinSize = 50, packBigFirst = true, packPerUse = 10, dailyLogin = true, dailyQuests = true, theme = "Dark",
+	skipWorlds = {}, skipPlanWait = 120,
 }
 for _, t in ipairs(TASKS) do table.insert(defaults.order, t.id) defaults.enabled[t.id] = t.on end
 for _, t in ipairs(data.towers) do
@@ -34,11 +37,18 @@ for _, t in ipairs(data.towers) do
 	defaults.repeatTowers[t.id] = next(t.repeatRolls) ~= nil
 end
 for _, d in ipairs(data.difficulties) do defaults.storyDiffs[d] = true end
+for _, w in ipairs(skip.WORLDS) do defaults.skipWorlds[w[1]] = not w.off end
 
 local cfg = core.readJson(SETTINGS_FILE) or {}
 for k, v in pairs(defaults) do
 	if cfg[k] == nil then cfg[k] = v
 	elseif type(v) == "table" and type(cfg[k]) == "table" and #v == 0 then for k2, v2 in pairs(v) do if cfg[k][k2] == nil then cfg[k][k2] = v2 end end end
+end
+-- tasks added after a settings file was saved go to the end of the saved order
+for _, t in ipairs(TASKS) do
+	local found = false
+	for _, id in ipairs(cfg.order) do if id == t.id then found = true end end
+	if not found then table.insert(cfg.order, t.id) end
 end
 core.settings = cfg
 local function save() core.writeJson(SETTINGS_FILE, cfg) end
@@ -47,7 +57,7 @@ local function save() core.writeJson(SETTINGS_FILE, cfg) end
 local running, stats = false, { win = 0, loss = 0, jobs = 0 }
 local SOURCES = {
 	dailies = extras.dailies, tower_repeat = towers.repeats, story_repeat = story.repeats, tower_clear = towers.clear,
-	story_clear = story.clear, instant_packs = extras.packs, story_tower = story.tower,
+	story_clear = story.clear, instant_packs = extras.packs, story_tower = story.tower, story_skip = skip,
 }
 local function nextJob(beforeId)
 	for _, id in ipairs(cfg.order) do
@@ -66,6 +76,7 @@ local function runJob(job)
 	if job.kind == "tower" then res = towers.run(job, cfg)
 	elseif job.kind == "story" then res = story.run(job, cfg)
 	elseif job.kind == "infinite" then res = story.runTower(job, cfg, function() return nextJob("story_tower") ~= nil end)
+	elseif job.kind == "storyskip" then res = skip.run(job, cfg)
 	elseif job.kind == "packs" then res = extras.runPacks(job, cfg)
 	elseif job.kind == "dailies" then res = extras.runDailies(job, cfg) end
 	stats.jobs += 1
@@ -175,6 +186,12 @@ for _, w in ipairs(data.worlds) do table.insert(worldNames, w.name) worldById[w.
 local dd = storyTab:Dropdown("World", worldNames, function(v) cfg.storyTowerWorld = worldById[v] or "" save() end)
 for _, w in ipairs(data.worlds) do if w.id == cfg.storyTowerWorld then dd:Set(w.name, true) end end
 storyTab:Slider("Minutes per turn", false, 5, 120, cfg.storyTowerMinutes, function(v) cfg.storyTowerMinutes = v save() end)
+storyTab:Line("Story Skip (1 key per fight, daily rewards of the whole world)")
+local keyLabel = storyTab:Label("Keys: start the farm to read them")
+storyTab:Label("Needs ss_watch.py running on the PC. Turn it on in the Farm tab; it stays idle with 0 keys.")
+for _, w in ipairs(skip.WORLDS) do
+	storyTab:Toggle(w[2] .. (w.off and "  (no winning deck yet)" or ""), cfg.skipWorlds[w[1]], function(v) cfg.skipWorlds[w[1]] = v save() end)
+end
 
 -- Packs
 packsTab:Line("Instant packs in your backpack")
@@ -237,6 +254,8 @@ task.spawn(function()
 				local o = {} for _, r in ipairs(rows) do table.insert(o, r[2] .. "x " .. r[1]) end
 				packLabel:SetText(#o > 0 and (table.concat(o, ", ") .. "\n<b>" .. total .. " rolls total</b>") or "No instant packs.")
 			end
+			local k = skip.keys()
+			if k then keyLabel:SetText("<b>Story Skip keys: " .. k .. "</b>" .. (k == 0 and "  (Story Skip stays off)" or "")) end
 		end
 		task.wait(1)
 	end
