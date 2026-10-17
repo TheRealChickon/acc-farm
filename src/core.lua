@@ -78,9 +78,21 @@ function core.send(name, ...)
 	return true
 end
 
+-- Settings "account" is a comma list of accounts the farm may run on ("" = any)
 function core.accountOk()
 	local allowed = core.settings and core.settings.account or "Whousleaks"
-	return allowed == "" or LP.Name == allowed
+	if allowed == "" then return true end
+	for name in string.gmatch(allowed, "[^,%s]+") do if name == LP.Name then return true end end
+	return false
+end
+function core.isMain() return LP.Name == "Whousleaks" end
+
+-- each account has its own folder for plans, heartbeats and PC-helper answers (both clients share one workspace):
+-- Whousleaks = AnimeCardClash/ (as the climbers always used), Umson_42 = AnimeCardClash/umson/ (its own climber), others by name
+function core.dir()
+	if LP.Name == "Whousleaks" then return "AnimeCardClash/" end
+	if LP.Name == "Umson_42" then return "AnimeCardClash/umson/" end
+	return "AnimeCardClash/" .. string.lower(LP.Name) .. "/"
 end
 
 function core.mem() return Stats:GetTotalMemoryUsageMb() end
@@ -137,9 +149,11 @@ end
 function core.writeJson(path, v) pcall(writefile, path, HS:JSONEncode(v)) end
 
 -- another script (the climbers) owns the game when its heartbeat is fresh: then the farm must not send anything
-local HEARTBEATS = { "AnimeCardClash/story_heartbeat.json", "AnimeCardClash/tower_climb_heartbeat.json", "AnimeCardClash/tower_heartbeat.json" }
+-- (the Deity helper's state.json counts too: it is written every few seconds while it runs)
+local HEARTBEATS = { "story_heartbeat.json", "tower_climb_heartbeat.json", "tower_heartbeat.json", "deity/state.json" }
 function core.otherScriptRunning()
-	for _, f in ipairs(HEARTBEATS) do
+	for _, name in ipairs(HEARTBEATS) do
+		local f = core.dir() .. name
 		local hb = core.readJson(f)
 		if hb and type(hb.t) == "number" and os.time() - hb.t < 60 then return f end
 	end

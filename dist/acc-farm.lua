@@ -81,9 +81,21 @@ function core.send(name, ...)
 	return true
 end
 
+-- Settings "account" is a comma list of accounts the farm may run on ("" = any)
 function core.accountOk()
 	local allowed = core.settings and core.settings.account or "Whousleaks"
-	return allowed == "" or LP.Name == allowed
+	if allowed == "" then return true end
+	for name in string.gmatch(allowed, "[^,%s]+") do if name == LP.Name then return true end end
+	return false
+end
+function core.isMain() return LP.Name == "Whousleaks" end
+
+-- each account has its own folder for plans, heartbeats and PC-helper answers (both clients share one workspace):
+-- Whousleaks = AnimeCardClash/ (as the climbers always used), Umson_42 = AnimeCardClash/umson/ (its own climber), others by name
+function core.dir()
+	if LP.Name == "Whousleaks" then return "AnimeCardClash/" end
+	if LP.Name == "Umson_42" then return "AnimeCardClash/umson/" end
+	return "AnimeCardClash/" .. string.lower(LP.Name) .. "/"
 end
 
 function core.mem() return Stats:GetTotalMemoryUsageMb() end
@@ -140,9 +152,11 @@ end
 function core.writeJson(path, v) pcall(writefile, path, HS:JSONEncode(v)) end
 
 -- another script (the climbers) owns the game when its heartbeat is fresh: then the farm must not send anything
-local HEARTBEATS = { "AnimeCardClash/story_heartbeat.json", "AnimeCardClash/tower_climb_heartbeat.json", "AnimeCardClash/tower_heartbeat.json" }
+-- (the Deity helper's state.json counts too: it is written every few seconds while it runs)
+local HEARTBEATS = { "story_heartbeat.json", "tower_climb_heartbeat.json", "tower_heartbeat.json", "deity/state.json" }
 function core.otherScriptRunning()
-	for _, f in ipairs(HEARTBEATS) do
+	for _, name in ipairs(HEARTBEATS) do
+		local f = core.dir() .. name
 		local hb = core.readJson(f)
 		if hb and type(hb.t) == "number" and os.time() - hb.t < 60 then return f end
 	end
@@ -309,13 +323,13 @@ function decks.tower(id, wave)
 	local out, rate = {}, nil
 	local own = load("acc-farm/decks.json")
 	if own and valid(own["tower:" .. id .. ":" .. wave]) then table.insert(out, own["tower:" .. id .. ":" .. wave]) end
-	local plan = load("AnimeCardClash/tower_plan_" .. id .. ".json")
+	local plan = load(core.dir() .. "tower_plan_" .. id .. ".json")
 	local e = plan and plan.waves and plan.waves[tostring(wave)]
 	if e then
 		rate = e.rate
 		for _, d in ipairs(e.decks or {}) do if valid(d) then table.insert(out, d) end end
 	end
-	local cd = load("AnimeCardClash/climb_decks.json")
+	local cd = load(core.dir() .. "climb_decks.json")
 	local d = cd and cd[id] and cd[id][tostring(wave)]
 	if valid(d) then table.insert(out, d) end
 	return out, rate
@@ -326,7 +340,7 @@ function decks.story(world, diff, boss)
 	local own = load("acc-farm/decks.json")
 	local k = "story:" .. world .. ":" .. diff .. ":" .. boss
 	if own and valid(own[k]) then table.insert(out, own[k]) end
-	local plan = load("AnimeCardClash/story_plan.json")
+	local plan = load(core.dir() .. "story_plan.json")
 	for _, st in ipairs(plan and plan.stages or {}) do
 		if st.world == world and st.diff == diff and st.boss == boss then
 			for _, d in ipairs(st.decks or {}) do if valid(d) then table.insert(out, d) end end
@@ -350,9 +364,571 @@ function decks.plan(path) return load(path) end
 
 return decks
 ]===]
+M["helpers/deity_run"] = [===[
+-- Tower of Deity executor (Whousleaks only). SENDS GAME COMMANDS: run only with the Coordinator's game handover.
+-- Dumb on purpose: all decisions (decks, start second, which party, which second) are made by deity_driver.py on the PC.
+-- Link = three small files in the executor workspace folder AnimeCardClash/deity/:
+--   cmd.json    PC -> game   {id=n, op=..., ...}   one command at a time, executed once per new id
+--   state.json  game -> PC   server time, session/battle read (cheap ECS reads, no getgc loop), events, last ack
+--   probe.json  game -> PC   written by op "probe": the account's towerOfDeity table and the 4 Deity deck slots (ONE getgc scan per probe)
+-- Ops (all timed ones carry `at` = whole server second; the command goes out at server time at + OFFSET, or is skipped if > LATE_MAX late):
+--   start      {at, wave, slots={4 slot names}, towerId=nil}   -> towerOfDeityAction {kind="startTower", slots, wave}
+--   continue   {at}                                             -> towerOfDeityAction {kind="continueTower"}
+--   select     {party}                                          -> towerOfDeityAction {kind="selectTowerParty", party}
+--   automation {setting="continue"|"rechallenge"|"swapTeam", enabled}  -> {kind="setTowerAutomation", setting, enabled}
+--   abandon    {}                                               -> {kind="abandonTower"}
+--   upgrade    {what="Damage"|"Health"|"AwakenedDamage"|"AwakenedHealth"} -> {kind="upgrade"..what}
+--   setdeck    {slot, attack={[1..4]=card}, support={[1..4]=card}}  (4 Deity slots only; 1.4 s between commands)
+--   probe      {}
+--   stop       {}
+-- Hard rules kept: Whousleaks only, >= 1.2 s between game commands, no hooks, no listeners, no getgc loop.
+-- Stop: _G.__DT_STOP = true.   Start: loadstring(readfile("AnimeCardClash/deity/deity_run.lua"))()
+if game.Players.LocalPlayer.Name ~= "Whousleaks" then print("DT WRONG ACCOUNT") return end
+local RS = game:GetService("ReplicatedStorage")
+local HS = game:GetService("HttpService")
+local LP = game.Players.LocalPlayer
+local comps = require(RS.shared.components)
+local jecs = require(RS.rbxts_include.node_modules["@rbxts"].jecs.src.jecs)
+
+local DIR = "AnimeCardClash/deity/"
+local OFFSET = _G.__DT_OFFSET or 0.35          -- fire this long after the planned whole second begins (server clock)
+local LATE_MAX = _G.__DT_LATE_MAX or 0.7       -- skip a timed command that would go out later than this after its second
+local GAP = 1.2                                -- minimum seconds between game commands
+local MAX_FIRES = _G.__DT_MAX_FIRES or 600     -- hard cap per script run
+local DECK_SLOTS = { slot_tower_of_deity_1 = true, slot_tower_of_deity_2 = true, slot_tower_of_deity_3 = true, slot_tower_of_deity_4 = true }
+
+_G.__DT_STOP = false
+_G.__DT_GEN = (_G.__DT_GEN or 0) + 1
+local GEN = _G.__DT_GEN
+pcall(makefolder, "AnimeCardClash")
+pcall(makefolder, "AnimeCardClash/deity")
+
+local function now() return workspace:GetServerTimeNow() end
+local function readJson(path) local ok, s = pcall(readfile, path) if not ok then return nil end local ok2, v = pcall(function() return HS:JSONDecode(s) end) return ok2 and v or nil end
+local function writeJson(path, v) local ok, s = pcall(function() return HS:JSONEncode(v) end) if ok then pcall(writefile, path, s) end return ok end
+local function flat(v) local o = {} if type(v) == "table" then for k, x in pairs(v) do local tx = type(x) if tx == "number" or tx == "string" or tx == "boolean" then o[tostring(k)] = x end end end return o end
+
+-- ---------------------------------------------------------------- game handles (one getgc scan, cached)
+local ctx = _G.__DT_CTX
+local function findCtx()
+  if ctx and pcall(function() return ctx.world end) then return ctx end
+  for _, t in ipairs(getgc(true)) do if type(t) == "table" then pcall(function() if rawget(t, "clientToServerEntities") ~= nil and rawget(t, "focusedBattleSession") ~= nil then ctx = t end end) end end
+  _G.__DT_CTX = ctx
+  return ctx
+end
+local remotes = {}
+local function remote(n)
+  if remotes[n] then return remotes[n] end
+  for _, d in ipairs(RS:GetDescendants()) do if d.Name == n and d:IsA("RemoteEvent") and not d:GetFullName():find("JABBY", 1, true) then remotes[n] = d return d end end
+end
+
+local lastSend = 0
+local fires = 0
+local function send(name, ...)
+  local r = remote(name)
+  if not r then return false, "no remote " .. name end
+  if fires >= MAX_FIRES then return false, "fire cap reached" end
+  local wait = lastSend + GAP - os.clock()
+  if wait > 0 then task.wait(wait) end
+  r:FireServer(...)
+  lastSend = os.clock()
+  fires += 1
+  return true
+end
+
+-- ---------------------------------------------------------------- cheap reads (ECS)
+local function session()
+  local c = findCtx()
+  if not c then return end
+  for e, v in c.world:query(comps.BattleSession) do if v.type == "tower_of_deity" then return e, v end end
+end
+local function battleOf(se)
+  local c = findCtx()
+  for be, b in c.world:query(comps.Battle, jecs.pair(jecs.ChildOf, se)) do return be, b end
+end
+
+-- ---------------------------------------------------------------- one-shot reads (getgc, only on op "probe"/"setdeck")
+local function userTable()
+  local best
+  for _, t in ipairs(getgc(true)) do
+    if type(t) == "table" then pcall(function() if rawget(t, "player") == LP and rawget(t, "inventories") then best = t end end) end
+  end
+  return best
+end
+local function copyDeep(v, depth, seen)
+  if type(v) ~= "table" then local tv = type(v) if tv == "number" or tv == "string" or tv == "boolean" then return v end return nil end
+  if depth <= 0 or seen[v] then return nil end
+  seen[v] = true
+  local o = {}
+  for k, x in pairs(v) do local c = copyDeep(x, depth - 1, seen) if c ~= nil then o[tostring(k)] = c end end
+  seen[v] = nil
+  return o
+end
+local function deckSlots(u)
+  local out = {}
+  local ok = pcall(function()
+    for name in pairs(DECK_SLOTS) do out[name] = copyDeep(u.inventories.main.party.slots[name], 4, {}) end
+  end)
+  return out
+end
+local function at(tbl, pos) return tbl and (tbl[pos] or tbl[tostring(pos)]) end
+
+-- ---------------------------------------------------------------- state publishing
+local events = {}
+local ack = nil
+local function ev(kind, t) t = t or {} t.kind = kind t.at = now() table.insert(events, t) if #events > 30 then table.remove(events, 1) end end
+local lastPub = 0
+local function publish(force)
+  if not force and os.clock() - lastPub < 0.2 then return end
+  lastPub = os.clock()
+  local se, s = session()
+  local snap = { gen = GEN, t = now(), ping = LP:GetNetworkPing(), fires = fires, ack = ack, events = events }
+  if se then
+    snap.session = flat(s)
+    local be, b = battleOf(se)
+    if be then snap.battle = flat(b) end
+  end
+  writeJson(DIR .. "state.json", snap)
+end
+
+-- ---------------------------------------------------------------- watcher (events from cheap reads)
+task.spawn(function()
+  local seenSeed, battleUp, winnerSeen = nil, false, false
+  while _G.__DT_STOP ~= true and _G.__DT_GEN == GEN do
+    task.wait(0.1)
+    local ok, err = pcall(function()
+      local se, s = session()
+      if not se then if battleUp then battleUp = false ev("battle_gone") end publish() return end
+      local be, b = battleOf(se)
+      if be and not battleUp then battleUp, winnerSeen = true, false ev("battle_start", { seed = b.seed, startedAt = b.startedAt, speed = b.speed, wave = s.wave, fight = s.fight, partyIndex = s.partyIndex }) end
+      if be and b.winner ~= nil and not winnerSeen then winnerSeen = true ev("winner", { winner = b.winner, seed = b.seed }) end
+      if not be and battleUp then battleUp = false ev("battle_gone", { wave = s.wave, fight = s.fight }) end
+      publish()
+    end)
+    if not ok then ev("error", { err = tostring(err):sub(1, 200) }) task.wait(1) end
+  end
+end)
+
+-- ---------------------------------------------------------------- timed fire
+local function fireAtSecond(T, name, payload)
+  while now() < T + OFFSET - 0.25 do if _G.__DT_STOP then return false, "stopped" end task.wait(0.05) end
+  while now() < T + OFFSET do end
+  local t = now()
+  if t > T + OFFSET + LATE_MAX then return false, "late " .. string.format("%.2f", t - T) end
+  local ok, err = send(name, payload)
+  return ok, err, t
+end
+
+-- ---------------------------------------------------------------- ops
+local ops = {}
+local function A(...)
+  if not remote("towerOfDeityAction") then return false, "no remote towerOfDeityAction" end
+  return send("towerOfDeityAction", ...)
+end
+
+function ops.start(c)
+  if not c.slots or #c.slots ~= 4 then return false, "need 4 slots" end
+  for _, s in ipairs(c.slots) do if not DECK_SLOTS[s] then return false, "bad slot " .. tostring(s) end end
+  local payload = { kind = "startTower", slots = c.slots, wave = c.wave }
+  if c.towerId then payload.towerId = c.towerId end
+  return fireAtSecond(c.at, "towerOfDeityAction", payload)
+end
+function ops.continue(c) return fireAtSecond(c.at, "towerOfDeityAction", { kind = "continueTower" }) end
+function ops.select(c) return A({ kind = "selectTowerParty", party = c.party }) end
+function ops.automation(c) return A({ kind = "setTowerAutomation", setting = c.setting, enabled = c.enabled == true }) end
+function ops.abandon(c) return A({ kind = "abandonTower" }) end
+function ops.upgrade(c)
+  local ok = { Damage = true, Health = true, AwakenedDamage = true, AwakenedHealth = true }
+  if not ok[c.what] then return false, "bad upgrade" end
+  return A({ kind = "upgrade" .. c.what })
+end
+function ops.probe(c)
+  local u = userTable()
+  if not u then return false, "no user table" end
+  local out = { t = now(), towerOfDeity = copyDeep(u.towerOfDeity, 7, {}), slots = deckSlots(u) }
+  writeJson(DIR .. "probe.json", out)
+  return true
+end
+function ops.setdeck(c)
+  if not DECK_SLOTS[c.slot] then return false, "bad slot" end
+  local u = userTable()
+  if not u then return false, "no user table" end
+  local function cur() local s = u.inventories.main.party.slots[c.slot] or { attack = {}, support = {} } return s end
+  local s = cur()
+  local diff = {}
+  for pos = 1, 4 do
+    local wa, ws = c.attack and at(c.attack, pos), c.support and at(c.support, pos)
+    if at(s.attack, pos) ~= wa or at(s.support, pos) ~= ws then table.insert(diff, pos) end
+  end
+  for _, pos in ipairs(diff) do
+    if at(s.attack, pos) then send("removeTowerOfDeityTeamPosition", c.slot, "attack", pos) task.wait(0.2) end
+    if at(s.support, pos) then send("removeTowerOfDeityTeamPosition", c.slot, "support", pos) task.wait(0.2) end
+  end
+  for _, pos in ipairs(diff) do
+    local wa, ws = c.attack and at(c.attack, pos), c.support and at(c.support, pos)
+    if wa then send("setTowerOfDeityTeamPosition", c.slot, wa, pos) task.wait(0.2) end
+    if ws then send("setTowerOfDeityTeamPosition", c.slot, ws, pos) task.wait(0.2) end
+  end
+  task.wait(2.5)
+  local after = cur()
+  for pos = 1, 4 do
+    local wa, ws = c.attack and at(c.attack, pos), c.support and at(c.support, pos)
+    if at(after.attack, pos) ~= wa or at(after.support, pos) ~= ws then return false, "deck mismatch at position " .. pos end
+  end
+  return true
+end
+function ops.stop(c) _G.__DT_STOP = true return true end
+
+-- ---------------------------------------------------------------- command loop
+task.spawn(function()
+  local lastId = -1
+  local first = readJson(DIR .. "cmd.json")
+  if first and first.id then lastId = first.id end          -- never replay a command left over from an earlier run
+  print("DT ready; ignoring cmd id <=", lastId)
+  ev("ready", { lastId = lastId })
+  publish(true)
+  while _G.__DT_STOP ~= true and _G.__DT_GEN == GEN do
+    task.wait(0.2)
+    local c = readJson(DIR .. "cmd.json")
+    if c and c.id and c.id > lastId then
+      lastId = c.id
+      local fn = ops[c.op]
+      local ok, a, b, t
+      if not fn then
+        ok, a, b = true, false, "unknown op " .. tostring(c.op)
+      else
+        ok, a, b, t = pcall(fn, c)
+      end
+      -- pcall returns (true, success, err, firedAt) or (false, errmsg)
+      local res = { id = c.id, op = c.op, ok = ok and a == true, err = (not ok) and tostring(a) or (a ~= true and tostring(b) or nil), firedAt = t, done = now() }
+      ack = res
+      ev("ack", res)
+      print("DT", c.op, c.id, res.ok and "ok" or ("FAILED " .. tostring(res.err)))
+      publish(true)
+    end
+  end
+  ev("over") publish(true)
+  print("DT over")
+end)
+]===]
+M["helpers/ranked_recorder"] = [===[
+-- Ranked recorder v1 (READ ONLY: no game commands, no hooks, no listeners, no getgc loop).
+-- Run in the attached client (Potassium execute_script) only while recording. Stop: _G.__RR_STOP = true
+-- One getgc scan at start (to find the client context); after that it only reads ctx.reflected() and the ECS BattleSession query.
+-- Every change in the ranked data is written as its own small file, so nothing is ever overwritten:
+--   <workspace>/AnimeCardClash/ranked_log/<kind>_<ms>_<n>.json     kinds: summary (offers, own defense, rating), history, fight_start, fight_end
+-- ranked_log.py ingest moves them into players/Whousleaks/ranked_log/*.jsonl (append only).
+-- Raw values are stored (depth <= 9), so unknown fields are kept for later analysis.
+if game.Players.LocalPlayer.Name ~= "Whousleaks" then print("RR WRONG ACCOUNT") return end
+_G.__RR_GEN = (_G.__RR_GEN or 0) + 1
+local GEN = _G.__RR_GEN
+_G.__RR_STOP = false
+local RS = game:GetService("ReplicatedStorage")
+local HS = game:GetService("HttpService")
+local comps = require(RS.shared.components)
+local POLL = _G.__RR_POLL or 4          -- seconds between reads (cheap table reads)
+local DIR = "AnimeCardClash/ranked_log"
+pcall(makefolder, "AnimeCardClash") pcall(makefolder, DIR)
+local n = 0
+local function clean(v, d)
+  d = d or 0
+  local t = typeof(v)
+  if t == "number" then if v ~= v or v == math.huge or v == -math.huge then return tostring(v) end return v
+  elseif t == "string" or t == "boolean" then return v
+  elseif t == "table" then
+    if d > 9 then return "<deep>" end
+    local o, c = {}, 0
+    for k, x in pairs(v) do c += 1 if c > 600 then break end o[tostring(k)] = clean(x, d + 1) end
+    return o
+  else return nil end
+end
+local function save(kind, rec)
+  n += 1
+  rec.kind = kind
+  rec.loggedAtClient = os.time()
+  rec.serverNow = workspace:GetServerTimeNow()
+  local ok, err = pcall(writefile, DIR .. "/" .. kind .. "_" .. math.floor(rec.serverNow * 1000) .. "_" .. n .. ".json", HS:JSONEncode(clean(rec)))
+  if not ok then print("RR write failed", err) end
+end
+local ctx
+local function findCtx()
+  for _, t in ipairs(getgc(true)) do
+    if type(t) == "table" then pcall(function() if rawget(t, "clientToServerEntities") ~= nil and rawget(t, "focusedBattleSession") ~= nil and rawget(t, "reflected") ~= nil then ctx = t end end) end
+  end
+  return ctx
+end
+local lastScan = 0
+local function user()
+  if not ctx then
+    if os.clock() - lastScan < 30 then return nil end   -- never scan more than every 30 s
+    lastScan = os.clock() findCtx()
+    if not ctx then return nil end
+  end
+  local ok, r = pcall(function() return ctx.reflected().user end)
+  return ok and r or nil
+end
+local seen = {}         -- kind/season/mode -> last encoded string
+local function changed(key, value)
+  local ok, s = pcall(function() return HS:JSONEncode(clean(value)) end)
+  if not ok then return false end
+  if seen[key] == s then return false end
+  seen[key] = s
+  return true
+end
+local function rankedSession()
+  local ok, e, v = pcall(function() for e, v in ctx.world:query(comps.BattleSession) do if v.type == "ranked" then return e, v end end end)
+  if ok then return e, v end
+end
+local cur   -- fight in progress {entity, seed, startedAt}
+task.spawn(function()
+  print("RR v1 running gen", GEN, "poll", POLL)
+  while not _G.__RR_STOP and _G.__RR_GEN == GEN do
+    local u = user()
+    if u and type(u.rankedSaves) == "table" then
+      for season, sv in pairs(u.rankedSaves) do
+        if type(sv) == "table" and type(sv.modes) == "table" then
+          for mode, m in pairs(sv.modes) do
+            if type(m) == "table" then
+              if m.summary and changed("s/" .. tostring(season) .. "/" .. mode, m.summary) then
+                save("summary", { season = tostring(season), mode = mode, summary = m.summary })
+              end
+              if m.history and changed("h/" .. tostring(season) .. "/" .. mode, m.history) then
+                save("history", { season = tostring(season), mode = mode, history = m.history })
+              end
+            end
+          end
+        end
+      end
+    end
+    if ctx then
+      local e, v = rankedSession()
+      if e and not cur then
+        local extra = {}
+        pcall(function() extra.rankedBattle = ctx.world:get(e, comps.RankedBattle) end)
+        cur = { entity = e, seed = v.seed, startedAt = v.startedAt }
+        save("fight_start", { session = v, rankedBattle = extra.rankedBattle, seed = v.seed, serverNowSeen = workspace:GetServerTimeNow() })
+        print("RR fight start seed", tostring(v.seed))
+      elseif cur and not e then
+        -- session gone: the next summary read carries won/lost for the offer; log the end marker too
+        save("fight_end", { seed = cur.seed, startedAt = cur.startedAt })
+        print("RR fight end seed", tostring(cur.seed))
+        cur = nil
+        seen = {}   -- force a fresh summary/history write after the fight
+      end
+    end
+    task.wait(POLL)
+  end
+  print("RR stopped")
+end)
+]===]
+M["helpers/steer"] = [===[
+-- Closed-loop seed steering for one battle-tower wave (2026-10-17, v4). Whousleaks only, slot_15 only.
+-- Commands: fightBattleTowerWave once (floor 1 on a safe second; skipped with _G.__ST_ATTACH), setBattleSpeed only otherwise.
+-- >= 1.5 s between commands. Needs steer_helper.py on the PC (answers steer_req.json with steer_plan_<seed>.json).
+-- Every floor: press until the speed is the base speed (_G.__ST_SPEED), ask the PC for the engine plan at that speed.
+-- At every client turn key the plan knows, forecast the end:  P = t_key + KA * engine s left * (plan speed / speed now)
+--   + KB * turn changes left + TAIL   (fitted on live floors). Next floor's seed = floor(P - D).
+-- If that second loses or sits near a boundary, pick the nearest reachable winning second (neighbours winning preferred) and press
+-- (speed s -> s + 0.5, which shortens the rest; 4.5 wraps to 1, which lengthens it) at the moment that puts the end in its middle.
+-- Up to MAXP steering presses per floor (a coarse early one, then corrections). Log: AnimeCardClash/steer_log.json. Stop: _G.__ST_STOP = true.
+if game.Players.LocalPlayer.Name ~= "Whousleaks" then print("ST WRONG ACCOUNT") return end
+local RS = game:GetService("ReplicatedStorage")
+local HS = game:GetService("HttpService")
+local comps = require(RS.shared.components)
+local jecs = require(RS.rbxts_include.node_modules["@rbxts"].jecs.src.jecs)
+local ctx = _G.__BS_CTX
+if not ctx then print("ST ABORT no ctx") return end
+local function remote(n) for _, d in ipairs(RS:GetDescendants()) do if d.Name == n and d:IsA("RemoteEvent") and not d:GetFullName():find("JABBY", 1, true) then return d end end end
+local R = { fight = remote("fightBattleTowerWave"), speed = remote("setBattleSpeed") }
+if not R.fight or not R.speed then print("ST ABORT remote missing") return end
+local TOWER, WAVE, SPEED = _G.__ST_TOWER or "darkness", _G.__ST_WAVE or 6, _G.__ST_SPEED or 2
+local D = _G.__ST_D or 0.085           -- client sees the fight end this long after the server (0.08-0.09, from 15 floors)
+local KA = _G.__ST_KA or 1.16          -- real s per engine s (delay/speed)
+local KB = _G.__ST_KB or 0.49          -- real s per remaining turn change
+local TAIL = _G.__ST_TAIL or 0.5       -- end seen this long after the engine's last turn
+local DECIDE = _G.__ST_DECIDE or 25    -- consider presses once the forecast end is this close (s)
+local LAT = _G.__ST_LAT or 0.07        -- fire this much before the computed press moment
+local MAXP = _G.__ST_MAXP or 3         -- steering presses per floor
+local ATTACH = _G.__ST_ATTACH == true
+local W = ctx.world
+local now = function() return workspace:GetServerTimeNow() end
+_G.__ST_STOP = false
+_G.__ST_GEN = (_G.__ST_GEN or 0) + 1
+local GEN = _G.__ST_GEN
+local LOG = { tower = TOWER, wave = WAVE, speed = SPEED, D = D, KA = KA, KB = KB, TAIL = TAIL, events = {} }
+local lastSave = 0
+local function save(force) if force or os.clock() - lastSave > 0.5 then lastSave = os.clock() pcall(writefile, "AnimeCardClash/steer_log.json", HS:JSONEncode(LOG)) end end
+local function log(kind, t) t = t or {} t.kind = kind t.at = now() table.insert(LOG.events, t) save(kind ~= "pred") end
+local function stopped() return _G.__ST_STOP or _G.__ST_GEN ~= GEN end
+local function moonNow() local ok, m = pcall(ctx.moonCycle) if ok and m and m.current then return m.current, (m.lastChanged and m.duration) and (m.lastChanged + m.duration) or nil end return "none", nil end
+local function sess() for e, v in W:query(comps.BattleSession) do if v.type == "battle_tower" then return e, v end end end
+local function battle() for e, b in W:query(comps.Battle) do return e, b end end
+local function turnKey(be, b)
+  local t = {}
+  for _, p in W:query(comps.BattlePlayer, jecs.pair(jecs.ChildOf, be)) do if p.side then t[p.side] = p.turn end end
+  return tostring(t.player_1) .. "/" .. tostring(t.player_2) .. "/" .. tostring(b.activeSide)
+end
+local lastCmd, presses = -10, 0
+local function fire(se, why)
+  local sv = ctx.clientToServerEntities[se]
+  if sv == nil or presses >= 150 then log("pressFail", { why = why }) return false end
+  while now() - lastCmd < 1.5 do task.wait(0.01) end
+  R.speed:FireServer(sv) lastCmd = now() presses += 1
+  log("press", { why = why, n = presses })
+  return true
+end
+local function nextSpeed(s) if s >= 4.5 then return 1 end return s + 0.5 end
+local function readJson(f) local ok, v = pcall(function() return HS:JSONDecode(readfile(f)) end) return ok and v or nil end
+
+task.spawn(function()
+  if ATTACH then
+    if not sess() then print("ST ABORT nothing to attach to") return end
+    log("attach")
+  else
+    local plan1 = readJson(("AnimeCardClash/tw_times_%s_%d.json"):format(TOWER, WAVE))
+    local T
+    for _, s in ipairs(plan1 and plan1.safe or {}) do if s >= now() + 10 and (T == nil or s < T) then T = s end end
+    if not T then print("ST ABORT no safe second") log("abort", { why = "no safe second" }) return end
+    if sess() then print("ST ABORT a tower session already exists") log("abort", { why = "session exists" }) return end
+    log("planned", { target = T })
+    print("ST start at", T, "in", math.floor(T - now()), "s")
+    while now() < T + 0.1 do task.wait(0.05) if stopped() then log("aborted") return end end
+    while now() < T + 0.35 do end
+    R.fight:FireServer(TOWER, WAVE, "slot_15") lastCmd = now()
+    log("fight", { target = T })
+  end
+
+  local t0, lastSeen, seen = os.clock(), os.clock(), false
+  local F = nil
+  local prevTarget = nil
+  local reqN = 0
+  local function newFloor(seed, tStart, speedNow)
+    local m, mEnd = moonNow()
+    if F and F.wins then log("landed", { seed = seed, wins = F.wins[seed] == true, target = prevTarget, hit = prevTarget == seed }) end
+    prevTarget = nil
+    F = { seed = seed, tStart = tStart, plan = nil, key = nil, steers = 0, tPress = nil, choice = nil, settled = false, moon = m, moonEnd = mEnd }
+    log("floor", { seed = seed, tStart = tStart, speed = speedNow, moon = m, moonEnd = mEnd })
+  end
+
+  while not stopped() and os.clock() - t0 < 2400 do
+    task.wait(0.02)
+    local ok, err = pcall(function()
+      local se, s = sess()
+      if not se then
+        if seen and os.clock() - lastSeen > 15 then _G.__ST_STOP = true end
+        if not seen and os.clock() - t0 > 40 then log("nostart") _G.__ST_STOP = true end
+        return
+      end
+      seen, lastSeen = true, os.clock()
+      if F == nil or s.seed ~= F.seed then
+        local _, b0 = battle()
+        newFloor(s.seed, now(), b0 and b0.speed or s.battleSpeed)
+      end
+      local be, b = battle()
+      if not be then return end
+      -- 1) base speed, then ask the PC for the plan at that speed
+      if not F.settled then
+        if b.speed == SPEED then
+          F.settled = true F.speed = SPEED reqN += 1
+          pcall(writefile, "AnimeCardClash/steer_req.json", HS:JSONEncode({ id = F.seed * 10 + reqN % 10, seed = F.seed, speed = SPEED, moon = F.moon, moonEnd = F.moonEnd, tStart = F.tStart }))
+          log("settled", { speed = SPEED })
+        elseif now() - lastCmd >= 1.5 and b.winner == nil then
+          fire(se, "base speed")
+        end
+        return
+      end
+      if not F.plan then
+        local p = readJson(("AnimeCardClash/steer_plan_%d.json"):format(F.seed))
+        if p and p.seed == F.seed and p.speed == F.speed then
+          F.plan = p F.wins = {} F.mt = {}
+          for _, x in ipairs(p.wins) do F.wins[x] = true end
+          for _, v in pairs(p.marks) do table.insert(F.mt, v[1]) end
+          log("plan", { winner = p.winner, total = p.total, nwins = #p.wins, from = p.from, to = p.to })
+        end
+      end
+      if not F.plan then return end
+      -- 2) forecast at each known turn key
+      local k = turnKey(be, b)
+      if k ~= F.key then
+        F.key = k
+        local m = F.plan.marks[k]
+        if m then
+          local tk, ek = now(), m[1]
+          local keysLeft = 0
+          for _, x in ipairs(F.mt) do if x > ek + 1e-6 then keysLeft += 1 end end
+          local q = F.speed / b.speed
+          F.fixed = KB * keysLeft + TAIL
+          F.P = tk + KA * (F.plan.total - ek) * q + F.fixed
+          F.choice = nil   -- re-decide with the fresh forecast
+          log("pred", { key = k, e = ek, P = F.P, speed = b.speed, keysLeft = keysLeft, next = math.floor(F.P - D) })
+        else
+          log("pred", { key = k, unknown = true })
+        end
+      end
+      local P = F.P
+      if not P or F.plan.winner ~= "player_1" then return end
+      if P - now() > DECIDE then return end
+      -- 3) decide
+      if not F.choice then
+        local x = P - D
+        local Scur = math.floor(x)
+        local frac = x - Scur
+        local wn = F.wins
+        local okHere = wn[Scur] and ((frac >= 0.3 and frac <= 0.7) or (frac < 0.3 and wn[Scur - 1]) or (frac > 0.7 and wn[Scur + 1]))
+        if okHere then
+          F.choice = { keep = true, S = Scur } F.tPress = nil prevTarget = Scur
+          log("keep", { S = Scur, frac = frac, P = P })
+        elseif F.steers >= MAXP then
+          F.choice = { none = true } F.tPress = nil
+          log("noPressLeft", { P = P, Scur = Scur, frac = frac })
+        else
+          local s1 = b.speed local s2 = nextSpeed(s1) local qq = s1 / s2
+          local fx = F.fixed or TAIL
+          local best
+          for pass = 1, 2 do
+            for d = 0, 30 do
+              local S = (qq < 1) and (Scur - d) or (Scur + d)
+              local good = wn[S] and (pass == 2 or (wn[S - 1] and wn[S + 1]))
+              if good and not best then
+                local X = S + 0.5 + D
+                local tp = (X - fx - (P - fx) * qq) / (1 - qq)
+                if tp >= math.max(now() + 0.3, lastCmd + 1.5) and tp < P - fx - 0.1 then best = { S = S, X = X, tp = tp, pass = pass } end
+              end
+            end
+          end
+          if best then
+            F.choice = best F.tPress = best.tp prevTarget = best.S
+            log("steer", { S = best.S, X = best.X, tPress = best.tp, P = P, s1 = s1, s2 = s2, pass = best.pass })
+          else
+            F.choice = { none = true } F.tPress = nil
+            log("noChoice", { P = P, Scur = Scur, frac = frac })
+          end
+        end
+      end
+      -- 4) press at the computed moment
+      if F.tPress and now() >= F.tPress - LAT then
+        local s1 = b.speed
+        F.tPress = nil
+        if fire(se, "steer to " .. tostring(F.choice.S)) then
+          F.steers += 1
+          local fx = F.fixed or TAIL
+          local q = s1 / nextSpeed(s1)
+          local at = now()
+          F.P = at + (P - fx - at) * q + fx
+          log("pressed", { target = F.choice.S, Pbefore = P, Pafter = F.P, s1 = s1, steers = F.steers })
+          F.choice = nil
+        end
+      end
+    end)
+    if not ok then log("error", { err = tostring(err) }) end
+  end
+  if F and F.wins and prevTarget then log("landed", { seed = nil, note = "session ended", target = prevTarget }) end
+  log("stop") save(true) print("ST over")
+end)
+]===]
 M["main"] = [===[
 -- Anime Card Clash auto farm: GUI + scheduler. Loaded by loader.lua, which passes import(name) -> module.
-local import = ...
+local import, run = ...
 local core = import("core")
 local data = import("data")
 local lib = import("ui")
@@ -362,7 +938,9 @@ local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
 local skip = import("tasks/storyskip", core)
 
-local SETTINGS_FILE = "acc-farm/settings.json"
+local LP = game:GetService("Players").LocalPlayer
+-- one settings file per account (Whousleaks keeps the first file name)
+local SETTINGS_FILE = LP.Name == "Whousleaks" and "acc-farm/settings.json" or ("acc-farm/settings_" .. LP.Name .. ".json")
 pcall(function() if not isfolder("acc-farm") then makefolder("acc-farm") end end)
 
 -- ---------- settings ----------
@@ -377,7 +955,7 @@ local TASKS = {
 	{ id = "story_tower", name = "Story tower crystals", on = false },
 }
 local defaults = {
-	account = "Whousleaks", order = {}, enabled = {}, towers = {}, repeatTowers = {}, towerOrder = {},
+	account = "Whousleaks, Umson_42", antiAfk = true, order = {}, enabled = {}, towers = {}, repeatTowers = {}, towerOrder = {},
 	deckMode = "auto", timed = false, hideFights = true, maxLosses = 3, minRate = 0, fightTimeout = 900, memLimit = 4500,
 	repeatAll = false, storyDiffs = {}, storyRepeatAll = false, storyTowerWorld = "", storyTowerMinutes = 20,
 	packMinSize = 50, packBigFirst = true, packPerUse = 10, dailyLogin = true, dailyQuests = true, theme = "Dark",
@@ -480,10 +1058,52 @@ local function stop()
 	_G.__ACCF_STOP = true
 end
 
+-- ---------- anti-AFK (same as toolkit/lua/anti_afk.lua: walk 3 studs and back every 10 min, local only, no commands) ----------
+local thisLoad = {}
+_G.__ACCF_LOAD = thisLoad   -- a newer window (or Stop and close) ends this loop
+task.spawn(function()
+	local waited = 0
+	while true do
+		task.wait(1)
+		if _G.__ACCF_LOAD ~= thisLoad then return end
+		waited += 1
+		if waited >= 600 then
+			waited = 0
+			if cfg.antiAfk and not _G.__AFK_RUN then   -- the toolkit's own anti-AFK may already run on this client
+				pcall(function()
+					local char = LP.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					local root = char and char:FindFirstChild("HumanoidRootPart")
+					if hum and root and hum.Health > 0 and not hum.Sit then
+						local home = root.Position
+						hum:MoveTo(home + Vector3.new(3, 0, 0))
+						task.wait(0.7)
+						hum:MoveTo(home)
+					end
+				end)
+			end
+		end
+	end
+end)
+
+-- ---------- beta helpers (whole scripts from the project; each one controls the game alone, so the farm stops first) ----------
+local farmToggle
+local function startHelper(name, setup)
+	if not core.isMain() then lib:Notification("Not on this account", "This one is made for Whousleaks only.", nil, "Okay") return end
+	local ok, err = core.init()
+	if not ok then lib:Notification("Can't start", err, nil, "Okay") return end
+	if running then stop() if farmToggle then farmToggle:Set(false, true) end end
+	if setup then setup() end
+	core.say("starting", name)
+	local ok2, e2 = pcall(run, "helpers/" .. name)
+	if not ok2 then core.say("could not start", name, e2) end
+end
+
 -- ---------- GUI ----------
 lib:ChangeTheme(cfg.theme)
 local win = lib:Window("Card Clash Farm")
 win:Label("Farm")
+local PINK = Color3.fromRGB(255, 110, 180)
 local RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, PURPLE, GREY =
 	Color3.fromRGB(255, 92, 92), Color3.fromRGB(255, 150, 70), Color3.fromRGB(240, 200, 60), Color3.fromRGB(80, 200, 120),
 	Color3.fromRGB(60, 190, 200), Color3.fromRGB(100, 140, 255), Color3.fromRGB(170, 110, 255), Color3.fromRGB(140, 145, 160)
@@ -495,12 +1115,13 @@ local packsTab = win:Tab("Packs", "rbxassetid://6026568210", YELLOW)
 local dailyTab = win:Tab("Dailies & events", "rbxassetid://6031302932", TEAL)
 local deckTab = win:Tab("Deck", "rbxassetid://6022668898", BLUE)
 win:Label("Info")
+local betaTab = win:Tab("Beta", "rbxassetid://6031280882", PINK)
 local statusTab = win:Tab("Status", "rbxassetid://6034509993", PURPLE)
 local setTab = win:Tab("Settings", "rbxassetid://6031280882", GREY)
 
 -- Farm
 home:Line("Start / stop")
-home:Toggle("Farm running", false, function(v) if v then start() else stop() end end)
+farmToggle = home:Toggle("Farm running", false, function(v) if v then start() else stop() end end)
 home:Toggle("Test mode (prints, sends nothing)", false, function(v) core.dry = v end)
 local nowLabel = home:Label("Idle")
 home:Line("What to farm (top = first)")
@@ -572,6 +1193,31 @@ deckTab:Slider("Losses before skipping a fight (per day)", false, 1, 10, cfg.max
 deckTab:Slider("Skip floors below this win % (stored plans)", false, 0, 90, cfg.minRate, function(v) cfg.minRate = v save() end)
 deckTab:Toggle("Hide fights (they run faster)", cfg.hideFights, function(v) cfg.hideFights = v save() end)
 
+-- Beta (not tested in the game yet; each needs its PC helper and stops the farm while it runs)
+betaTab:Label("These are new and not tested in the game yet. Starting one stops the farm. Whousleaks only.")
+betaTab:Line("Tower of Deity (timed wins)")
+betaTab:Label("PC: run the Deity driver (tasks/2026-10-17-deity). Uses the 4 Deity deck slots, not Deck 15.")
+betaTab:Button("Start Deity helper", function() startHelper("deity_run") end)
+betaTab:Button("Stop Deity helper", function() _G.__DT_STOP = true core.say("Deity helper stop sent") end)
+betaTab:Line("Speed steering (wins every tower floor)")
+betaTab:Label("Presses the speed button near the end of each fight so the next floor starts on a winning second. PC: steer_helper.py with the same tower + floor.")
+local mainTowers, towerIdByName = {}, {}
+for _, t in ipairs(data.towers) do if t.group == "main" then table.insert(mainTowers, t.name) towerIdByName[t.name] = t.id end end
+local steerTower, steerWave = "darkness", 7
+betaTab:Dropdown("Tower", mainTowers, function(v) steerTower = towerIdByName[v] or steerTower end)
+betaTab:Slider("Floor", false, 1, 25, steerWave, function(v) steerWave = v end)
+betaTab:Button("Start speed steering", function()
+	startHelper("steer", function() _G.__BS_CTX = core.ctx _G.__ST_TOWER = steerTower _G.__ST_WAVE = steerWave end)
+end)
+betaTab:Button("Stop speed steering", function() _G.__ST_STOP = true core.say("speed steering stop sent") end)
+betaTab:Line("Ranked")
+betaTab:Label("No ranked season right now (season 11 is not out). The recorder only reads, so it can run next to the farm.")
+betaTab:Button("Start ranked recorder (read only)", function()
+	if not core.isMain() then return end
+	local ok = pcall(run, "helpers/ranked_recorder") core.say(ok and "ranked recorder started" or "ranked recorder failed")
+end)
+betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
+
 -- Status
 local stLabel = statusTab:Label("Stopped")
 local statLabel = statusTab:Label("")
@@ -582,9 +1228,11 @@ local logLabel = statusTab:Label("")
 setTab:Button("Dark theme", function() cfg.theme = "Dark" save() lib:ChangeTheme("Dark") end)
 setTab:Button("Light theme", function() cfg.theme = "Light" save() lib:ChangeTheme("Light") end)
 setTab:Bind("Show / hide window", lib.ToggleKey, false, true, function() end)
-setTab:Textbox("Only run on account", false, false, function(v) cfg.account = v save() end):Set(cfg.account)
+setTab:Textbox("Accounts it may run on (comma list)", false, false, function(v) cfg.account = v save() end):Set(cfg.account)
+setTab:Toggle("Anti-AFK (small step every 10 min)", cfg.antiAfk, function(v) cfg.antiAfk = v save() end)
+setTab:Label("This window is for " .. LP.Name .. ". Each account keeps its own settings and deck plans.")
 setTab:Slider("Pause above game memory (MB)", false, 2000, 8000, cfg.memLimit, function(v) cfg.memLimit = v save() end)
-setTab:Button("Stop and close", function() stop() lib:Destroy() end)
+setTab:Button("Stop and close", function() stop() _G.__ACCF_LOAD = nil lib:Destroy() end)
 
 -- live status refresh
 task.spawn(function()
@@ -809,7 +1457,7 @@ function story.run(job, cfg)
 	local srv = core.serverId(e)
 	if not srv then fails[k] = (fails[k] or 0) + 1 return "nosrv" end
 	if cfg.timed then   -- story_scan_watcher.py on the PC answers with winning start seconds
-		local r = core.askTimes("AnimeCardClash/sc_need.json", "AnimeCardClash/story_times_" .. job.world .. "_" .. job.diff .. "_" .. job.boss .. ".json",
+		local r = core.askTimes(core.dir() .. "sc_need.json", core.dir() .. "story_times_" .. job.world .. "_" .. job.diff .. "_" .. job.boss .. ".json",
 			{ world = job.world, diff = job.diff, boss = job.boss, deck = -1, pairs = core.deck, from = math.floor(core.now()) + 6, to = math.floor(core.now()) + 96 }, 75)
 		local T
 		if r then for _, s in ipairs(r.safe or r.wins or {}) do if s >= core.now() + 4 then T = s break end end end
@@ -946,6 +1594,7 @@ local skipped, skippedDay, helperQuietUntil = {}, 0, 0
 local function resetDay() local d = core.dayStart() if d ~= skippedDay then skippedDay, skipped = d, {} end end
 
 function skip.next(cfg)
+	if not core.isMain() then return nil end   -- keys, plans and ss_watch.py are Whousleaks's
 	resetDay()
 	if os.clock() < helperQuietUntil then return nil end
 	local k = skip.keys()
@@ -1111,7 +1760,7 @@ function towers.run(job, cfg)
 	if core.stopped() then return "stopped" end
 	-- optional timed start on a second the PC engine predicts to win (tower_watcher.py)
 	if cfg.timed then
-		local r = core.askTimes("AnimeCardClash/tw_need.json", "AnimeCardClash/tw_times_" .. job.mode .. "_" .. job.wave .. ".json",
+		local r = core.askTimes(core.dir() .. "tw_need.json", core.dir() .. "tw_times_" .. job.mode .. "_" .. job.wave .. ".json",
 			{ tower = job.mode, wave = job.wave, pairs = core.deck, moon = "none", from = math.floor(core.now()) + 8, to = math.floor(core.now()) + 608 }, 120)
 		if r and r.safe then
 			local T

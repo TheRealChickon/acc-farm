@@ -1,5 +1,5 @@
 -- Anime Card Clash auto farm: GUI + scheduler. Loaded by loader.lua, which passes import(name) -> module.
-local import = ...
+local import, run = ...
 local core = import("core")
 local data = import("data")
 local lib = import("ui")
@@ -9,7 +9,9 @@ local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
 local skip = import("tasks/storyskip", core)
 
-local SETTINGS_FILE = "acc-farm/settings.json"
+local LP = game:GetService("Players").LocalPlayer
+-- one settings file per account (Whousleaks keeps the first file name)
+local SETTINGS_FILE = LP.Name == "Whousleaks" and "acc-farm/settings.json" or ("acc-farm/settings_" .. LP.Name .. ".json")
 pcall(function() if not isfolder("acc-farm") then makefolder("acc-farm") end end)
 
 -- ---------- settings ----------
@@ -24,7 +26,7 @@ local TASKS = {
 	{ id = "story_tower", name = "Story tower crystals", on = false },
 }
 local defaults = {
-	account = "Whousleaks", order = {}, enabled = {}, towers = {}, repeatTowers = {}, towerOrder = {},
+	account = "Whousleaks, Umson_42", antiAfk = true, order = {}, enabled = {}, towers = {}, repeatTowers = {}, towerOrder = {},
 	deckMode = "auto", timed = false, hideFights = true, maxLosses = 3, minRate = 0, fightTimeout = 900, memLimit = 4500,
 	repeatAll = false, storyDiffs = {}, storyRepeatAll = false, storyTowerWorld = "", storyTowerMinutes = 20,
 	packMinSize = 50, packBigFirst = true, packPerUse = 10, dailyLogin = true, dailyQuests = true, theme = "Dark",
@@ -127,10 +129,52 @@ local function stop()
 	_G.__ACCF_STOP = true
 end
 
+-- ---------- anti-AFK (same as toolkit/lua/anti_afk.lua: walk 3 studs and back every 10 min, local only, no commands) ----------
+local thisLoad = {}
+_G.__ACCF_LOAD = thisLoad   -- a newer window (or Stop and close) ends this loop
+task.spawn(function()
+	local waited = 0
+	while true do
+		task.wait(1)
+		if _G.__ACCF_LOAD ~= thisLoad then return end
+		waited += 1
+		if waited >= 600 then
+			waited = 0
+			if cfg.antiAfk and not _G.__AFK_RUN then   -- the toolkit's own anti-AFK may already run on this client
+				pcall(function()
+					local char = LP.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					local root = char and char:FindFirstChild("HumanoidRootPart")
+					if hum and root and hum.Health > 0 and not hum.Sit then
+						local home = root.Position
+						hum:MoveTo(home + Vector3.new(3, 0, 0))
+						task.wait(0.7)
+						hum:MoveTo(home)
+					end
+				end)
+			end
+		end
+	end
+end)
+
+-- ---------- beta helpers (whole scripts from the project; each one controls the game alone, so the farm stops first) ----------
+local farmToggle
+local function startHelper(name, setup)
+	if not core.isMain() then lib:Notification("Not on this account", "This one is made for Whousleaks only.", nil, "Okay") return end
+	local ok, err = core.init()
+	if not ok then lib:Notification("Can't start", err, nil, "Okay") return end
+	if running then stop() if farmToggle then farmToggle:Set(false, true) end end
+	if setup then setup() end
+	core.say("starting", name)
+	local ok2, e2 = pcall(run, "helpers/" .. name)
+	if not ok2 then core.say("could not start", name, e2) end
+end
+
 -- ---------- GUI ----------
 lib:ChangeTheme(cfg.theme)
 local win = lib:Window("Card Clash Farm")
 win:Label("Farm")
+local PINK = Color3.fromRGB(255, 110, 180)
 local RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, PURPLE, GREY =
 	Color3.fromRGB(255, 92, 92), Color3.fromRGB(255, 150, 70), Color3.fromRGB(240, 200, 60), Color3.fromRGB(80, 200, 120),
 	Color3.fromRGB(60, 190, 200), Color3.fromRGB(100, 140, 255), Color3.fromRGB(170, 110, 255), Color3.fromRGB(140, 145, 160)
@@ -142,12 +186,13 @@ local packsTab = win:Tab("Packs", "rbxassetid://6026568210", YELLOW)
 local dailyTab = win:Tab("Dailies & events", "rbxassetid://6031302932", TEAL)
 local deckTab = win:Tab("Deck", "rbxassetid://6022668898", BLUE)
 win:Label("Info")
+local betaTab = win:Tab("Beta", "rbxassetid://6031280882", PINK)
 local statusTab = win:Tab("Status", "rbxassetid://6034509993", PURPLE)
 local setTab = win:Tab("Settings", "rbxassetid://6031280882", GREY)
 
 -- Farm
 home:Line("Start / stop")
-home:Toggle("Farm running", false, function(v) if v then start() else stop() end end)
+farmToggle = home:Toggle("Farm running", false, function(v) if v then start() else stop() end end)
 home:Toggle("Test mode (prints, sends nothing)", false, function(v) core.dry = v end)
 local nowLabel = home:Label("Idle")
 home:Line("What to farm (top = first)")
@@ -219,6 +264,31 @@ deckTab:Slider("Losses before skipping a fight (per day)", false, 1, 10, cfg.max
 deckTab:Slider("Skip floors below this win % (stored plans)", false, 0, 90, cfg.minRate, function(v) cfg.minRate = v save() end)
 deckTab:Toggle("Hide fights (they run faster)", cfg.hideFights, function(v) cfg.hideFights = v save() end)
 
+-- Beta (not tested in the game yet; each needs its PC helper and stops the farm while it runs)
+betaTab:Label("These are new and not tested in the game yet. Starting one stops the farm. Whousleaks only.")
+betaTab:Line("Tower of Deity (timed wins)")
+betaTab:Label("PC: run the Deity driver (tasks/2026-10-17-deity). Uses the 4 Deity deck slots, not Deck 15.")
+betaTab:Button("Start Deity helper", function() startHelper("deity_run") end)
+betaTab:Button("Stop Deity helper", function() _G.__DT_STOP = true core.say("Deity helper stop sent") end)
+betaTab:Line("Speed steering (wins every tower floor)")
+betaTab:Label("Presses the speed button near the end of each fight so the next floor starts on a winning second. PC: steer_helper.py with the same tower + floor.")
+local mainTowers, towerIdByName = {}, {}
+for _, t in ipairs(data.towers) do if t.group == "main" then table.insert(mainTowers, t.name) towerIdByName[t.name] = t.id end end
+local steerTower, steerWave = "darkness", 7
+betaTab:Dropdown("Tower", mainTowers, function(v) steerTower = towerIdByName[v] or steerTower end)
+betaTab:Slider("Floor", false, 1, 25, steerWave, function(v) steerWave = v end)
+betaTab:Button("Start speed steering", function()
+	startHelper("steer", function() _G.__BS_CTX = core.ctx _G.__ST_TOWER = steerTower _G.__ST_WAVE = steerWave end)
+end)
+betaTab:Button("Stop speed steering", function() _G.__ST_STOP = true core.say("speed steering stop sent") end)
+betaTab:Line("Ranked")
+betaTab:Label("No ranked season right now (season 11 is not out). The recorder only reads, so it can run next to the farm.")
+betaTab:Button("Start ranked recorder (read only)", function()
+	if not core.isMain() then return end
+	local ok = pcall(run, "helpers/ranked_recorder") core.say(ok and "ranked recorder started" or "ranked recorder failed")
+end)
+betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
+
 -- Status
 local stLabel = statusTab:Label("Stopped")
 local statLabel = statusTab:Label("")
@@ -229,9 +299,11 @@ local logLabel = statusTab:Label("")
 setTab:Button("Dark theme", function() cfg.theme = "Dark" save() lib:ChangeTheme("Dark") end)
 setTab:Button("Light theme", function() cfg.theme = "Light" save() lib:ChangeTheme("Light") end)
 setTab:Bind("Show / hide window", lib.ToggleKey, false, true, function() end)
-setTab:Textbox("Only run on account", false, false, function(v) cfg.account = v save() end):Set(cfg.account)
+setTab:Textbox("Accounts it may run on (comma list)", false, false, function(v) cfg.account = v save() end):Set(cfg.account)
+setTab:Toggle("Anti-AFK (small step every 10 min)", cfg.antiAfk, function(v) cfg.antiAfk = v save() end)
+setTab:Label("This window is for " .. LP.Name .. ". Each account keeps its own settings and deck plans.")
 setTab:Slider("Pause above game memory (MB)", false, 2000, 8000, cfg.memLimit, function(v) cfg.memLimit = v save() end)
-setTab:Button("Stop and close", function() stop() lib:Destroy() end)
+setTab:Button("Stop and close", function() stop() _G.__ACCF_LOAD = nil lib:Destroy() end)
 
 -- live status refresh
 task.spawn(function()

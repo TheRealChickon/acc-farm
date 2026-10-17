@@ -32,6 +32,21 @@ Then press **Farm running** on the Farm tab.
 | Open instant packs | opens instant packs from your backpack (off by default) |
 | Story tower crystals | climbs one world's story tower; steps aside whenever something higher in the list is ready |
 
+## Beta tab (new, not tested in the game yet; Whousleaks only; starting one stops the farm)
+
+| Button | What it does | PC side |
+|---|---|---|
+| Deity helper | Tower of Deity timed wins (4 Deity deck slots, not Deck 15) | `tasks/2026-10-17-deity` driver |
+| Speed steering | presses the speed button near each fight's end so the next tower floor starts on a winning second | `steer_helper.py --tower .. --wave ..` |
+| Ranked recorder | only reads ranked offers (no season right now) | `ranked_log.py ingest` |
+
+## Accounts
+
+Runs on every account in Settings (default `Whousleaks, Umson_42`). Each account has its own settings file
+(`acc-farm/settings_<name>.json`, Whousleaks keeps `acc-farm/settings.json`) and its own plan folder
+(Whousleaks `AnimeCardClash/`, Umson_42 `AnimeCardClash/umson/`), so one client never waits for the other's climber.
+Anti-AFK (Settings, on by default) takes a small step every 10 minutes.
+
 A fight that is lost **Losses before skipping** times in one game day is left alone until the next day, so the
 farm moves on to other towers "until it gets hard" by itself.
 
@@ -39,7 +54,7 @@ farm moves on to other towers "until it gets hard" by itself.
 
 - Deck changes only in **Deck 15** (`slot_15`). Your other decks are never touched.
 - At least 1.4 s between two game commands. No hooks, no listeners.
-- Only runs on the account in Settings (default `Whousleaks`).
+- Only runs on the accounts in Settings (default `Whousleaks, Umson_42`).
 - Waits while another script (the climbers) is running, and pauses when the game uses too much memory.
 
 ## Decks

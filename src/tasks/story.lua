@@ -99,7 +99,7 @@ function story.run(job, cfg)
 	local srv = core.serverId(e)
 	if not srv then fails[k] = (fails[k] or 0) + 1 return "nosrv" end
 	if cfg.timed then   -- story_scan_watcher.py on the PC answers with winning start seconds
-		local r = core.askTimes("AnimeCardClash/sc_need.json", "AnimeCardClash/story_times_" .. job.world .. "_" .. job.diff .. "_" .. job.boss .. ".json",
+		local r = core.askTimes(core.dir() .. "sc_need.json", core.dir() .. "story_times_" .. job.world .. "_" .. job.diff .. "_" .. job.boss .. ".json",
 			{ world = job.world, diff = job.diff, boss = job.boss, deck = -1, pairs = core.deck, from = math.floor(core.now()) + 6, to = math.floor(core.now()) + 96 }, 75)
 		local T
 		if r then for _, s in ipairs(r.safe or r.wins or {}) do if s >= core.now() + 4 then T = s break end end end

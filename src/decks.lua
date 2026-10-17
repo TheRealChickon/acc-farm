@@ -26,13 +26,13 @@ function decks.tower(id, wave)
 	local out, rate = {}, nil
 	local own = load("acc-farm/decks.json")
 	if own and valid(own["tower:" .. id .. ":" .. wave]) then table.insert(out, own["tower:" .. id .. ":" .. wave]) end
-	local plan = load("AnimeCardClash/tower_plan_" .. id .. ".json")
+	local plan = load(core.dir() .. "tower_plan_" .. id .. ".json")
 	local e = plan and plan.waves and plan.waves[tostring(wave)]
 	if e then
 		rate = e.rate
 		for _, d in ipairs(e.decks or {}) do if valid(d) then table.insert(out, d) end end
 	end
-	local cd = load("AnimeCardClash/climb_decks.json")
+	local cd = load(core.dir() .. "climb_decks.json")
 	local d = cd and cd[id] and cd[id][tostring(wave)]
 	if valid(d) then table.insert(out, d) end
 	return out, rate
@@ -43,7 +43,7 @@ function decks.story(world, diff, boss)
 	local own = load("acc-farm/decks.json")
 	local k = "story:" .. world .. ":" .. diff .. ":" .. boss
 	if own and valid(own[k]) then table.insert(out, own[k]) end
-	local plan = load("AnimeCardClash/story_plan.json")
+	local plan = load(core.dir() .. "story_plan.json")
 	for _, st in ipairs(plan and plan.stages or {}) do
 		if st.world == world and st.diff == diff and st.boss == boss then
 			for _, d in ipairs(st.decks or {}) do if valid(d) then table.insert(out, d) end end

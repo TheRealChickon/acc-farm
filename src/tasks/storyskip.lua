@@ -58,6 +58,7 @@ local skipped, skippedDay, helperQuietUntil = {}, 0, 0
 local function resetDay() local d = core.dayStart() if d ~= skippedDay then skippedDay, skipped = d, {} end end
 
 function skip.next(cfg)
+	if not core.isMain() then return nil end   -- keys, plans and ss_watch.py are Whousleaks's
 	resetDay()
 	if os.clock() < helperQuietUntil then return nil end
 	local k = skip.keys()

@@ -85,7 +85,7 @@ function towers.run(job, cfg)
 	if core.stopped() then return "stopped" end
 	-- optional timed start on a second the PC engine predicts to win (tower_watcher.py)
 	if cfg.timed then
-		local r = core.askTimes("AnimeCardClash/tw_need.json", "AnimeCardClash/tw_times_" .. job.mode .. "_" .. job.wave .. ".json",
+		local r = core.askTimes(core.dir() .. "tw_need.json", core.dir() .. "tw_times_" .. job.mode .. "_" .. job.wave .. ".json",
 			{ tower = job.mode, wave = job.wave, pairs = core.deck, moon = "none", from = math.floor(core.now()) + 8, to = math.floor(core.now()) + 608 }, 120)
 		if r and r.safe then
 			local T

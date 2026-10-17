@@ -33,5 +33,11 @@ local function import(name, ...)
 	loaded[name] = mod
 	return mod
 end
-return import("main", import)
+-- helpers (whole scripts copied from the project, run as they are): run(name) starts one
+local function run(name)
+	local src = sources[name]
+	if not src then error("Card Clash Farm: script missing: " .. name) end
+	return loadstring(src, "=" .. name)()
+end
+return import("main", import, run)
 ]====]

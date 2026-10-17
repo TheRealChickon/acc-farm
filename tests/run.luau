@@ -213,4 +213,41 @@ check(next(M.sessions) == nil, "no Story Skip fight left open")
 check(findText(gui, "Story Skip keys: 3") ~= nil, "window shows 3 keys")
 check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
 
+log("8) second account (Umson_42)")
+farm.settings.enabled.tower_repeat = true
+game:GetService("Players").LocalPlayer.Name = "Umson_42"
+M.files["AnimeCardClash/story_heartbeat.json"] = HS:JSONEncode({ t = os.time() })          -- Whousleaks's climber: not ours
+M.files["AnimeCardClash/umson/story_heartbeat.json"] = HS:JSONEncode({ t = os.time() })    -- Umson's climber runs: wait
+M.sent = {}
+task.spawn(farm.start)
+M.run(M.now + 60)
+check(#M.sent == 0, "waits for Umson's own climber")
+M.files["AnimeCardClash/umson/story_heartbeat.json"] = nil
+M.user.inventories.main.backpack.story_skip_key = 5
+for _, w in pairs(M.skipWorlds) do w.claimed = false end
+M.user.battleTowerProgress.android[25].lastWin = 0
+M.run(M.now + 600)
+local skipSent = false for _, x in ipairs(M.sent) do if x.name == "fightStorySkip" then skipSent = true end end
+check(#M.sent > 0, "farms on Umson_42 although Whousleaks's climber runs")
+check(not skipSent, "no Story Skip on Umson_42 (Whousleaks's keys plan)")
+farm.stop()
+M.run(M.now + 60)
+local function click(t) findText(gui, t).Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire() end
+click("Start Deity helper")
+M.run(M.now + 2)
+check(findText(gui, "Not on this account") ~= nil, "beta helpers refused on Umson_42")
+check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
+game:GetService("Players").LocalPlayer.Name = "Whousleaks"
+M.files["AnimeCardClash/story_heartbeat.json"] = nil
+
+log("9) beta helper stops the farm first")
+task.spawn(farm.start)
+M.run(M.now + 30)
+M.sent = {}
+click("Start Deity helper")
+M.run(M.now + 60)
+check(#M.sent == 0, "farm stopped when the Deity helper starts (it controls the game alone)")
+_G.__DT_STOP = true
+M.run(M.now + 10)
+
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
