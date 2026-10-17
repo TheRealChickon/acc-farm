@@ -8,7 +8,7 @@ resize from the bottom-right corner, `–` to fold it, RightControl to hide or s
 From GitHub (private repo, needs a read-only token saved once in the executor workspace as `acc-farm/token.txt`):
 
 ```lua
-loadstring(request({Url="https://raw.githubusercontent.com/OWNER/REPO/main/loader.lua",Headers={Authorization="token "..readfile("acc-farm/token.txt")}}).Body)()
+loadstring(request({Url="https://raw.githubusercontent.com/TheRealChickon/acc-farm/main/loader.lua",Headers={Authorization="token "..readfile("acc-farm/token.txt")}}).Body)()
 ```
 
 Without GitHub (files copied into the executor workspace under `acc-farm/`):

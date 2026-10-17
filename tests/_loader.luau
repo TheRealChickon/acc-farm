@@ -1,9 +1,9 @@
 return [====[
 -- Card Clash Farm loader. Run it with (one line, your token in the executor's workspace file acc-farm/token.txt):
---   loadstring(request({Url="https://raw.githubusercontent.com/OWNER/REPO/main/loader.lua",Headers={Authorization="token "..readfile("acc-farm/token.txt")}}).Body)()
+--   loadstring(request({Url="https://raw.githubusercontent.com/TheRealChickon/acc-farm/main/loader.lua",Headers={Authorization="token "..readfile("acc-farm/token.txt")}}).Body)()
 -- It downloads dist/acc-farm.lua (all modules in one file) from the same private repo and starts the window.
 -- Offline / testing: put the repo's src folder at acc-farm/src in the workspace and set getgenv().ACC_LOCAL = true first.
-local REPO = getgenv().ACC_REPO or "OWNER/REPO"
+local REPO = getgenv().ACC_REPO or "TheRealChickon/acc-farm"
 local BRANCH = getgenv().ACC_BRANCH or "main"
 
 local sources
