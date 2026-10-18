@@ -3,7 +3,7 @@
 -- Virtual clock: task.wait advances time instantly, so hours of farming run in a second.
 local M = { now = 1792263600 + 600, sent = {}, violations = {}, files = {}, printed = {} }
 local realLoadstring, realSetfenv = loadstring, setfenv
-local env = setmetatable({}, { __index = _G })
+local env = setmetatable({}, { __index = (getfenv and getfenv(1)) or _G })   -- the real globals (also works under Lune, where _G is not the global table)
 M.env = env
 setfenv(1, env)
 env._G = env

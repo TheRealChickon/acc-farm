@@ -8,6 +8,7 @@ local towers = import("tasks/towers", core, data, decks)
 local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
 local skip = import("tasks/storyskip", core)
+local cyber = import("tasks/cyberpunk", core)
 
 local LP = game:GetService("Players").LocalPlayer
 -- one settings file per account (Whousleaks keeps the first file name)
@@ -30,7 +31,7 @@ local defaults = {
 	deckMode = "auto", timed = false, hideFights = true, maxLosses = 3, minRate = 0, fightTimeout = 900, memLimit = 4500,
 	repeatAll = false, storyDiffs = {}, storyRepeatAll = false, storyTowerWorld = "", storyTowerMinutes = 20,
 	packMinSize = 50, packBigFirst = true, packPerUse = 10, dailyLogin = true, dailyQuests = true, theme = "Dark",
-	skipWorlds = {}, skipPlanWait = 120,
+	skipWorlds = {}, skipPlanWait = 120, cyberVersion = "newest",
 }
 for _, t in ipairs(TASKS) do table.insert(defaults.order, t.id) defaults.enabled[t.id] = t.on end
 for _, t in ipairs(data.towers) do
@@ -178,6 +179,7 @@ local PINK = Color3.fromRGB(255, 110, 180)
 local RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, PURPLE, GREY =
 	Color3.fromRGB(255, 92, 92), Color3.fromRGB(255, 150, 70), Color3.fromRGB(240, 200, 60), Color3.fromRGB(80, 200, 120),
 	Color3.fromRGB(60, 190, 200), Color3.fromRGB(100, 140, 255), Color3.fromRGB(170, 110, 255), Color3.fromRGB(140, 145, 160)
+local CYAN = Color3.fromRGB(0, 215, 255)
 
 local home = win:Tab("Farm", "rbxassetid://6031280882", GREEN)
 local towersTab = win:Tab("Towers", "rbxassetid://6034287519", RED)
@@ -185,6 +187,8 @@ local storyTab = win:Tab("Story", "rbxassetid://6031763426", ORANGE)
 local packsTab = win:Tab("Packs", "rbxassetid://6026568210", YELLOW)
 local dailyTab = win:Tab("Dailies & events", "rbxassetid://6031302932", TEAL)
 local deckTab = win:Tab("Deck", "rbxassetid://6022668898", BLUE)
+win:Label("Events")
+local cyTab = win:Tab("Cyberpunk", "rbxassetid://6031280882", CYAN)
 win:Label("Info")
 local betaTab = win:Tab("Beta", "rbxassetid://6031280882", PINK)
 local statusTab = win:Tab("Status", "rbxassetid://6034509993", PURPLE)
@@ -289,6 +293,94 @@ betaTab:Button("Start ranked recorder (read only)", function()
 end)
 betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
 
+-- Cyberpunk Run event: starts / stops the shared farm script (tasks/cyberpunk.lua) and shows what it and the deck optimiser write.
+-- A problem in this tab must not take the rest of the window down, so it is built and refreshed inside pcall.
+local cyToggle, cyState, cyRun, cyAim, cyBuy, cyDeck, cyBest, cyTry, cySafe, cyOther
+local cyDry, cyStartAt, cyOwn = false, nil, false   -- cyOwn: started from this window ("Stop and close" then stops it too)
+local function startCyber()
+	cyStartAt = os.clock()
+	local ok, msg = cyber.start({
+		version = cfg.cyberVersion, dry = cyDry,
+		before = function()   -- one script sends at a time: the tower / story farm steps aside
+			if running then stop() if farmToggle then farmToggle:Set(false, true) end core.say("tower / story farm stopped: the Cyberpunk farm controls the game") end
+		end,
+	})
+	if ok then cyOwn = true
+	else cyStartAt = nil if cyToggle then cyToggle:Set(false, true) end end
+	lib:Notification("Cyberpunk farm", msg, nil, "Okay")
+end
+local function stopCyber()
+	local _, what = cyber.stop(LP.Name)
+	cyStartAt = nil
+	lib:Notification("Cyberpunk farm", what == "sent" and "Stop sent. It ends after the step it is on." or "The Cyberpunk farm was not running.", nil, "Okay")
+end
+local function otherAccount() return LP.Name == "Whousleaks" and "Umson_42" or "Whousleaks" end
+local function buildCyber()
+	cyTab:Line("Cyberpunk Run  ·  this window: " .. LP.Name)
+	cyToggle = cyTab:Toggle("Cyberpunk farm running", false, function(v) if v then startCyber() else stopCyber() end end)
+	cyState = cyTab:Label("…")
+	cyRun = cyTab:Label("")
+	cyTab:Line("What it is aiming for")
+	cyAim = cyTab:Label("")
+	cyTab:Line("Next purchase")
+	cyBuy = cyTab:Label("")
+	cyTab:Line("Deck in play")
+	cyDeck = cyTab:Label("")
+	cyTab:Line("Best deck found")
+	cyBest = cyTab:Label("")
+	cyTab:Line("Trying now")
+	cyTry = cyTab:Label("")
+	cyTab:Line("Safety")
+	cySafe = cyTab:Label("")
+	cyTab:Button("Make sure shop buying is off", function()
+		if not cyber.ACCOUNTS[LP.Name] then return end
+		local _, msg = cyber.shopOff(LP.Name)
+		lib:Notification("Cyberpunk farm", msg, nil, "Okay")
+	end)
+	cyTab:Line("Options")
+	cyTab:RadioButtons("Script", { "Newest", "Previous" }, function(v) cfg.cyberVersion = (v == "Previous") and "previous" or "newest" save() end)
+		:Set(cfg.cyberVersion == "previous" and "Previous" or "Newest", true)
+	cyTab:Label("Newest = cyber_farm.lua. If it can't load or crashes at once, the previous one (cyber_farm_prev.lua) starts instead. Anti-AFK is not part of this: it runs from your autoexec.")
+	cyTab:Toggle("Test mode (decides and logs, sends nothing)", false, function(v) cyDry = v _G.__CF_DRY = v or nil end)
+	cyTab:Line("Other account")
+	cyOther = cyTab:Label("")
+	cyTab:Button("Stop the other account's Cyberpunk farm", function()
+		if not cyber.ACCOUNTS[LP.Name] then return end
+		local _, what = cyber.stop(otherAccount())
+		lib:Notification("Cyberpunk farm", what == "sent" and ("Stop sent to " .. otherAccount() .. ". Start it again from its own window.") or (otherAccount() .. "'s Cyberpunk farm is not running."), nil, "Okay")
+	end)
+end
+local okCy, errCy = pcall(buildCyber)
+if not okCy then
+	core.say("Cyberpunk tab could not be built:", errCy)
+	pcall(function() cyTab:Label("This tab could not be built: " .. tostring(errCy)) end)
+end
+local cyLast, cyErr = -10, nil
+local function refreshCyber()
+	if not cyState or os.clock() - cyLast < 2 then return end
+	cyLast = os.clock()
+	if not cyber.ACCOUNTS[LP.Name] then
+		cyState:SetText("<b>The Cyberpunk farm is set up for Whousleaks and Umson_42 only.</b>")
+		return
+	end
+	local snap = cyber.read(LP.Name)
+	local v = cyber.view(snap)
+	local alive = cyber.alive(snap)
+	local stopping = alive and (snap.flag == "0" or _G.__CF_STOP == true)   -- stop was sent and the script has not ended yet
+	local starting = not alive and cyStartAt ~= nil and os.clock() - cyStartAt < 20
+	if not alive and not starting then cyOwn = false end
+	cyState:SetText(stopping and "<b>Stopping…</b>" or (starting and "<b>Starting…</b>" or v.state))
+	cyRun:SetText(v.run)
+	cyAim:SetText(v.aiming)
+	cyBuy:SetText(v.buy)
+	cyDeck:SetText(v.deck)
+	cyBest:SetText(v.best)
+	cyTry:SetText(v.trying)
+	cySafe:SetText(v.safety)
+	cyToggle:Set((alive and not stopping) or starting, true)
+	cyOther:SetText(cyber.view(cyber.read(otherAccount())).line)
+end
+
 -- Status
 local stLabel = statusTab:Label("Stopped")
 local statLabel = statusTab:Label("")
@@ -303,7 +395,12 @@ setTab:Textbox("Accounts it may run on (comma list)", false, false, function(v) 
 setTab:Toggle("Anti-AFK (small step every 10 min)", cfg.antiAfk, function(v) cfg.antiAfk = v save() end)
 setTab:Label("This window is for " .. LP.Name .. ". Each account keeps its own settings and deck plans.")
 setTab:Slider("Pause above game memory (MB)", false, 2000, 8000, cfg.memLimit, function(v) cfg.memLimit = v save() end)
-setTab:Button("Stop and close", function() stop() _G.__ACCF_LOAD = nil lib:Destroy() end)
+setTab:Button("Stop and close", function()
+	stop()
+	if cyOwn and cyber.ACCOUNTS[LP.Name] then pcall(cyber.stop, LP.Name) end   -- the Cyberpunk farm only if this window started it
+	_G.__ACCF_LOAD = nil
+	lib:Destroy()
+end)
 
 -- live status refresh
 task.spawn(function()
@@ -329,6 +426,8 @@ task.spawn(function()
 			local k = skip.keys()
 			if k then keyLabel:SetText("<b>Story Skip keys: " .. k .. "</b>" .. (k == 0 and "  (Story Skip stays off)" or "")) end
 		end
+		local okR, eR = pcall(refreshCyber)
+		if not okR and eR ~= cyErr then cyErr = eR core.say("Cyberpunk tab:", eR) end
 		task.wait(1)
 	end
 end)
