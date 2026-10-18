@@ -40,6 +40,23 @@ Then press **Farm running** on the Farm tab.
 | Speed steering | presses the speed button near each fight's end so the next tower floor starts on a winning second | `steer_helper.py --tower .. --wave ..` |
 | Ranked recorder | only reads ranked offers (no season right now) | `ranked_log.py ingest` |
 
+## Cyberpunk tab (Events > Cyberpunk)
+
+Starts and stops the Cyberpunk Run farm script, one switch per window (the window's own account) and shows what the farm and the deck optimiser
+already write. It plays nothing itself: the shared `cyber_farm.lua` is read from the executor workspace every time it starts
+(`AnimeCardClash/` for Whousleaks, `AnimeCardClash/umson/` for Umson_42), so it is always the newest one.
+
+| Part | What it does |
+|---|---|
+| Switch "Cyberpunk farm running" | on = checks everything, sets the flag file to `1`, starts the script in its own thread; off = `_G.__CF_STOP` and `0` in `cyber_farm.flag` (and switches off the autoexec's restart after a rejoin, `umson/cyber.flag`). Starting stops the tower / story farm first (one script sends at a time); the tower / story farm waits while the Cyberpunk farm runs. |
+| Script: Newest / Previous | Newest = `cyber_farm.lua`; if it is missing, does not compile or crashes in the first 30 s, `cyber_farm_prev.lua` starts instead. Previous = that one on purpose. |
+| What it shows | state and act / room / Eddies / runs from `cyber_farm_hb.json`; from `cyber_status_<account>.json`: what it is aiming for, the next purchase, the deck in play, the best deck found, what the optimiser is trying now. |
+| Safety lines | shop buying (OFF; if the settings say ON it is switched OFF at every start, never ON), the lock (`whousleaks_owner.json` / `umson/cyber_owner.json`: the farm waits unless it says `cyberpunk_w` / `cyberpunk_u`; the window never changes the lock), the anti-AFK heartbeat (anti-AFK runs from the autoexec, not from here). |
+| Test mode | `_G.__CF_DRY`: the farm decides and logs but sends nothing. |
+| Other account | its state, and a stop button (flag file only; start it from that account's own window). |
+
+Joyride is not part of this tab. Stop and close also stops the Cyberpunk farm, but only when this window started it.
+
 ## Accounts
 
 Runs on every account in Settings (default `Whousleaks, Umson_42`). Each account has its own settings file
@@ -72,4 +89,6 @@ live). **Probe** on the "Dailies & events" tab saves that data to `acc-farm/prob
 
 - `src/` modules, `loader.lua` loads `dist/acc-farm.lua` (all modules in one file).
 - After editing: `python3 tools/bundle.py` (rebuilds `dist/`), then `luau tests/run.luau` (fake game, runs hours of farming in a second).
+  Without the Luau CLI (Windows PC): `lune run tests/run.luau` does the same. `python tools/check_farm.py` checks that the installed farm scripts still keep
+  what the Cyberpunk tab relies on (stop flag, alive stamp, heartbeat, account table); run it after the Cyberpunk threads change `cyber_farm.lua`.
 - After a game update: `python3 tools/build_data.py <macro/data/towers.json> <macro/data/story.json>` rebuilds `src/data.lua`.

@@ -42,7 +42,7 @@ end
 function core.init()
 	if core.ctx then return true end
 	core.comps = require(RS.shared.components)
-	local ctx = _G.__ACC_CTX
+	local ctx = _G.__ACC_CTX or _G.__BS_CTX   -- the other scripts (recorder, Cyberpunk farm) keep the same context table in __BS_CTX
 	for _ = 1, 20 do
 		if ctx then break end
 		for _, t in ipairs(getgc(true)) do
@@ -149,13 +149,17 @@ end
 function core.writeJson(path, v) pcall(writefile, path, HS:JSONEncode(v)) end
 
 -- another script (the climbers) owns the game when its heartbeat is fresh: then the farm must not send anything
--- (the Deity helper's state.json counts too: it is written every few seconds while it runs)
-local HEARTBEATS = { "story_heartbeat.json", "tower_climb_heartbeat.json", "tower_heartbeat.json", "deity/state.json" }
-function core.otherScriptRunning()
+-- (the Deity helper's state.json counts too: it is written every few seconds while it runs; so does the Cyberpunk farm's
+-- heartbeat, until it says "stopped"). `except` = a heartbeat file name to leave out (the Cyberpunk tab asks about the others)
+local HEARTBEATS = { "story_heartbeat.json", "tower_climb_heartbeat.json", "tower_heartbeat.json", "deity/state.json", "cyber_farm_hb.json" }
+function core.otherScriptRunning(except)
 	for _, name in ipairs(HEARTBEATS) do
-		local f = core.dir() .. name
-		local hb = core.readJson(f)
-		if hb and type(hb.t) == "number" and os.time() - hb.t < 60 then return f end
+		if name ~= except then
+			local f = core.dir() .. name
+			local hb = core.readJson(f)
+			local ended = hb and type(hb.status) == "string" and hb.status:sub(1, 7) == "stopped"
+			if hb and type(hb.t) == "number" and os.time() - hb.t < 60 and not ended then return f end
+		end
 	end
 end
 
