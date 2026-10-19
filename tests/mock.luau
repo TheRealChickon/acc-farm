@@ -3,7 +3,7 @@
 -- Virtual clock: task.wait advances time instantly, so hours of farming run in a second.
 local M = { now = 1792263600 + 600, sent = {}, violations = {}, files = {}, printed = {} }
 local realLoadstring, realSetfenv = loadstring, setfenv
-local env = setmetatable({}, { __index = _G })
+local env = setmetatable({}, { __index = (getfenv and getfenv(1)) or _G })   -- the real globals (also works under Lune, where _G is not the global table)
 M.env = env
 setfenv(1, env)
 env._G = env
@@ -83,7 +83,7 @@ local function signal()
 	return s
 end
 local Inst = {}
-local EVENTS = { MouseButton1Click = 1, MouseButton1Down = 1, MouseEnter = 1, MouseLeave = 1, InputBegan = 1, InputChanged = 1, InputEnded = 1, FocusLost = 1, Heartbeat = 1, OnClientEvent = 1 }
+local EVENTS = { MouseButton1Click = 1, MouseButton1Down = 1, MouseEnter = 1, MouseLeave = 1, InputBegan = 1, InputChanged = 1, InputEnded = 1, FocusLost = 1, Heartbeat = 1, OnClientEvent = 1, Changed = 1, ChildAdded = 1, RenderStepped = 1 }
 local function newInstance(class, name)
 	local o = { ClassName = class, Name = name or class, _children = {}, _props = {} }
 	return setmetatable(o, Inst)
@@ -94,6 +94,7 @@ Inst.__index = function(o, k)
 	if EVENTS[k] then local s = signal() rawset(o, k, s) return s end
 	if k == "Parent" then return rawget(o, "_parent") end
 	if k == "AbsolutePosition" or k == "AbsoluteSize" then return Vector2.new(0, 100) end
+	if k == "TextBounds" or k == "AbsoluteContentSize" then return Vector2.new(60, 20) end
 	local p = rawget(o, "_props")[k]
 	if p ~= nil then return p end
 	local c = o:FindFirstChild(k)
@@ -126,6 +127,18 @@ function Inst:IsA(cl)
 end
 function Inst:GetFullName() local p, s = rawget(self, "_parent"), self.Name while p do s = p.Name .. "." .. s p = rawget(p, "_parent") end return s end
 function Inst:Destroy() self.Parent = nil rawset(self, "_destroyed", true) end
+-- what the UI library needs from an instance (no layout engine: sizes are fixed numbers)
+function Inst:GetPropertyChangedSignal(prop)
+	local sigs = rawget(self, "_psig") or {}
+	rawset(self, "_psig", sigs)
+	sigs[prop] = sigs[prop] or signal()
+	return sigs[prop]
+end
+function Inst:SetAttribute(k, v) local a = rawget(self, "_attr") or {} rawset(self, "_attr", a) a[k] = v end
+function Inst:GetAttribute(k) local a = rawget(self, "_attr") return a and a[k] end
+function Inst:TweenSize(sz, _, _, _, _, cb) self.Size = sz if cb then cb() end return true end
+function Inst:TweenPosition(pos, _, _, _, _, cb) self.Position = pos if cb then cb() end return true end
+function Inst:Clone() local c = newInstance(self.ClassName, self.Name) for k, v in pairs(rawget(self, "_props")) do rawget(c, "_props")[k] = v end return c end
 function Inst:FireServer(...) M.onRemote(self.Name, ...) end
 function Inst:Disconnect() end
 Instance = { new = function(class, parent) local o = newInstance(class) if parent then o.Parent = parent end return o end }
@@ -143,6 +156,8 @@ local LP = newInstance("Player", "Whousleaks")
 LP.Parent = Players
 Players.LocalPlayer = LP
 local pg = newInstance("PlayerGui", "PlayerGui") pg.Parent = LP
+local mouse = newInstance("Mouse", "Mouse") mouse.X = 0 mouse.Y = 0
+function LP:GetMouse() return mouse end
 local CoreGui = svc("CoreGui")
 local UIS = svc("UserInputService")
 local RunService = svc("RunService")
@@ -153,6 +168,7 @@ function Stats:GetTotalMemoryUsageMb() return M.memory or 1800 end
 local HttpService = svc("HttpService")
 local RS = svc("ReplicatedStorage")
 workspace = newInstance("Workspace", "Workspace")
+local cam = newInstance("Camera", "Camera") cam.ViewportSize = Vector2.new(1920, 1080) workspace.CurrentCamera = cam
 function workspace:GetServerTimeNow() M.now += 0.0005 return M.now end
 
 -- remotes, in a folder like the game's

@@ -131,7 +131,7 @@ local saved = HS:JSONDecode(M.files["acc-farm/settings.json"])
 check(saved.order[2] == first, "order saved to acc-farm/settings.json")
 local lbl = findText(gui, "Forest Tower")
 check(lbl ~= nil, "tower toggles listed (Forest Tower)")
-local sw = lbl.Parent:FindFirstChildOfClass("TextButton")
+local sw = (lbl.Parent.ClassName == "TextButton") and lbl.Parent or lbl.Parent:FindFirstChildOfClass("TextButton")   -- dawidlib: the toggle IS the button
 sw.MouseButton1Click:Fire()
 M.run(M.now + 1)
 check(farm.settings.towers.forest == false, "turning Forest off is saved")
@@ -232,7 +232,9 @@ check(#M.sent > 0, "farms on Umson_42 although Whousleaks's climber runs")
 check(not skipSent, "no Story Skip on Umson_42 (Whousleaks's keys plan)")
 farm.stop()
 M.run(M.now + 60)
-local function click(t) findText(gui, t).Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire() end
+local function btnOf(l) return (l.Parent.ClassName == "TextButton") and l.Parent or l.Parent:FindFirstChildOfClass("TextButton") end   -- dawidlib: the label sits inside its button
+local function boxOf(l) for _, d in ipairs(l.Parent:GetDescendants()) do if d.ClassName == "TextBox" then return d end end end
+local function click(t) btnOf(findText(gui, t)).MouseButton1Click:Fire() end
 click("Start Deity helper")
 M.run(M.now + 2)
 check(findText(gui, "Not on this account") ~= nil, "beta helpers refused on Umson_42")
@@ -266,7 +268,7 @@ check(pv ~= nil and pgui ~= nil, "preview window opens")
 check(next((function() local t = {} for k, v in pairs(pv.settings.enabled) do if v then t[k] = v end end return t end)()) == nil, "every task is off")
 pv.start()
 M.run(M.now + 5)
-local function clickp(t) findText(pgui, t).Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire() end
+local function clickp(t) btnOf(findText(pgui, t)).MouseButton1Click:Fire() end
 clickp("Probe (read only)") clickp("Read Deck 15") clickp("Start Deity helper") clickp("Start ranked recorder (read only)")
 M.run(M.now + 700)
 check(#M.sent == sentBefore and M.getgcCalls == gcBefore, "preview sends no command and scans nothing")
@@ -293,34 +295,34 @@ local g2 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
 check(findText(g2, "weights.completion_card_M") ~= nil and findText(g2, "allowed.modes.forest.allowed") ~= nil, "only the director's editable settings are listed")
 check(findText(g2, "weights.luck_M_per_pct") == nil and findText(g2, "accounts") == nil, "read-only fields get no control")
 check(findText(g2, "Event running, Shinsu Training next.") ~= nil and findText(g2, "cp_search") ~= nil and findText(g2, "horizon_h") ~= nil, "status text, workers and refused changes shown")
-findText(g2, "allowed.modes.forest.allowed").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
+btnOf(findText(g2, "allowed.modes.forest.allowed")).MouseButton1Click:Fire()
 M.run(M.now + 1)
 local ov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
 check(ov.set["allowed.modes.forest.allowed"] == false, "a switch goes to director_overrides.json only")
 check(HS:JSONDecode(M.files["AnimeCardClash/director_config.json"]).allowed.modes.forest.allowed == true, "the config mirror is never written")
 M.files["AnimeCardClash/director_overrides.json"] = HS:JSONEncode({ set = { ["horizon_h"] = 8 } })   -- the director's side added a key meanwhile
-local tb = findText(g2, "weights.completion_card_M").Parent:FindFirstChildOfClass("TextBox")
+local tb = boxOf(findText(g2, "weights.completion_card_M"))
 tb.Text = "0.7" tb.FocusLost:Fire()
 M.run(M.now + 1)
 local o2 = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
 check(o2.set["weights.completion_card_M"] == 0.7 and o2.set.horizon_h == 8, "a typed number keeps the other keys in the file")
-local tb2 = findText(g2, "workers.ram_floor_gb").Parent:FindFirstChildOfClass("TextBox")
+local tb2 = boxOf(findText(g2, "workers.ram_floor_gb"))
 tb2.Text = "1" tb2.FocusLost:Fire()
 M.run(M.now + 1)
 check(HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"]).set["workers.ram_floor_gb"] == nil, "a value below the minimum is refused")
 -- equip commands (Beta tab)
 game:GetService("Players").LocalPlayer.Name = "Whousleaks"
 M.sent = {}
-local function box(t) return findText(g2, t).Parent:FindFirstChildOfClass("TextBox") end
+local function box(t) return boxOf(findText(g2, t)) end
 local b1, b2 = box("Technique id"), box("Card id")
 b1.Text = "fishermans_assault" b1.FocusLost:Fire() b2.Text = "pumpkin_witch_cat" b2.FocusLost:Fire()
 M.run(M.now + 1)
-findText(g2, "Equip (main game)").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
+btnOf(findText(g2, "Equip (main game)")).MouseButton1Click:Fire()
 M.run(M.now + 30)
 local eq = M.sent[#M.sent]
 for _, x in ipairs(M.sent) do if x.name == "equipTechnique" then eq = x end end
 check(eq and eq.name == "equipTechnique" and eq.args[1] == "fishermans_assault" and eq.args[2] == "pumpkin_witch_cat", "equip button sends equipTechnique(techniqueId, cardId)")
-findText(g2, "Equip (Tower of Deity)").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
+btnOf(findText(g2, "Equip (Tower of Deity)")).MouseButton1Click:Fire()
 M.run(M.now + 5)
 local ed = M.sent[#M.sent]
 check(ed and ed.name == "towerOfDeityAction" and ed.args[1].kind == "equipTechnique" and ed.args[1].card == "pumpkin_witch_cat", "Deity equip sends towerOfDeityAction")
@@ -341,5 +343,99 @@ getgenv().ACC_STOP()
 M.run(M.now + 30)
 getgenv().ACC_HEADLESS = nil
 check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
+
+log("12) autopilot tab + status bar")
+game:GetService("Players").LocalPlayer.Name = "Whousleaks"
+M.files["AnimeCardClash/autopilot/config.json"] = HS:JSONEncode({ focus = "auto", jobs = { claims = { allowed = true }, packs = { allowed = true } },
+	accounts = { Whousleaks = { new_account_mode = false } },
+	editable = { focus = { kind = "enum", values = { "auto", "luck", "traits", "packs" } }, ["jobs.claims.allowed"] = { kind = "bool" }, ["jobs.packs.allowed"] = { kind = "bool" },
+		["accounts.Whousleaks.new_account_mode"] = { kind = "bool" } } })
+M.files["AnimeCardClash/autopilot/status.json"] = HS:JSONEncode({ updatedAt = os.time(), dry_run = true, live = { approved_steps = {} },
+	accounts = { Whousleaks = { now = "Cyberpunk event run + Shinsu Training", next = "Planner pick: Story tower crystals", why = "luck first: Sword of Hope",
+		conditions = { "story-tower script passes its watched test" }, focus = { chosen = "auto", effective = "luck", why = "luck first" },
+		quick = { { label = "Claim the daily login reward", state = "ready" }, { label = "Open packs in a good moon", state = "waiting" } } } } })
+M.files["AnimeCardClash/autopilot_overrides.json"] = nil
+M.files["acc-farm/settings.json"] = HS:JSONEncode({})
+_G.__ACCF_LOAD = nil
+local apw
+task.spawn(function() apw = loadstring(M.files.LOADER)() end)
+M.run(M.now + 5)
+local g3 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
+check(g3 ~= nil and findText(g3, "Cyberpunk event run + Shinsu Training") ~= nil and findText(g3, "luck first: Sword of Hope") ~= nil, "autopilot tab shows now / why")
+check(findText(g3, "Claim the daily login reward") ~= nil, "ready quick jobs listed")
+local bar = findText(g3, "Autopilot · Luck index")
+check(bar ~= nil, "status bar shows the autopilot under every tab")
+-- focus: click "Trait rerolls" -> overrides file, nothing else
+local radio = findText(g3, "Trait rerolls")
+check(radio ~= nil, "focus choices listed")
+btnOf(radio).MouseButton1Click:Fire()
+M.run(M.now + 1)
+local ov = M.files["AnimeCardClash/autopilot_overrides.json"] and HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+check(ov and ov.set and ov.set.focus == "traits", "focus change goes to autopilot_overrides.json")
+local sw = findText(g3, "Packs")
+-- the job switch "Packs" (not the focus radio "Packs"): find the toggle whose text is exactly "Packs"
+local tog
+for _, d in ipairs(g3:GetDescendants()) do if d.Text == "Packs" and d.Parent and d.Parent.ClassName == "TextButton" and d.Name == "ToggleText" then tog = d.Parent end end
+check(tog ~= nil, "job switches listed")
+if tog then tog.MouseButton1Click:Fire() end
+M.run(M.now + 1)
+ov = HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+check(ov.set["jobs.packs.allowed"] == false and ov.set.focus == "traits", "a job switch keeps the focus already in the file")
+M.sent = {}
+btnOf(findText(g3, "Start the runner (only approved jobs)")).MouseButton1Click:Fire()
+M.run(M.now + 2)
+check(findText(g3, "Nothing approved") ~= nil and #M.sent == 0, "runner refuses while nothing is approved")
+check(findText(g3, "The autopilot does not touch Joyride.") ~= nil, "Joyride is a slot only")
+apw.stop() M.run(M.now + 10)
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+_G.__ACCF_LOAD = nil
+check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
+
+log("13) focus and manual priority go to the planner's file")
+M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ focus = "auto", editable = { focus = { kind = "enum", values = { "auto", "luck", "traits", "packs" } } } })
+M.files["AnimeCardClash/director_status.json"] = HS:JSONEncode({ updated = os.time(), text = "x",
+	queue = { { rank = 1, id = "story_tower:sword_of_hope", label = "Sword of Hope", draggable = true }, { rank = 2, id = "deity:training", label = "Shinsu Training", draggable = true },
+		{ rank = 3, id = "tower:toon_x:1", label = "Dream", draggable = false } },
+	override = { mode = "auto", expired = false, remaining_s = 0 } })
+M.files["AnimeCardClash/director_overrides.json"] = HS:JSONEncode({ set = { horizon_h = 8 } })
+M.files["AnimeCardClash/autopilot_overrides.json"] = nil
+_G.__ACCF_LOAD = nil
+local w4
+task.spawn(function() w4 = loadstring(M.files.LOADER)() end)
+M.run(M.now + 5)
+local g4 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
+local packsRadio
+for _, d in ipairs(g4:GetDescendants()) do if d.Text == "Packs" and d.Parent and d.Parent.Name == "RadioBtn" then packsRadio = d.Parent end end
+check(packsRadio ~= nil, "focus radio found")
+packsRadio.MouseButton1Click:Fire()
+M.run(M.now + 1)
+local dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.set.focus == "packs" and dov.set.horizon_h == 8 and M.files["AnimeCardClash/autopilot_overrides.json"] == nil, "focus goes to director_overrides.json, other keys kept")
+check(findText(g4, ".  Shinsu Training") ~= nil and findText(g4, ".  Dream") == nil, "priority list shows the movable rows only")
+-- move Sword of Hope (row 1 of the priority list) down
+local row1 = findText(g4, "1.  Sword of Hope").Parent
+for _, c in ipairs(row1:GetChildren()) do if c.Text == "▼" then c.MouseButton1Click:Fire() end end
+M.run(M.now + 1)
+btnOf(findText(g4, "Use my order")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.mode == "manual" and dov.queue_order[1] == "deity:training" and dov["until"] > os.time() and dov.set.focus == "packs", "my order is written with an expiry, focus kept")
+btnOf(findText(g4, "Back to automatic")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.mode == "auto" and #dov.queue_order == 0, "back to automatic clears my order")
+M.sent = {}
+btnOf(findText(g4, "ROLL PACKS ON NEXT IDEAL TIME")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+local aov = HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+local ro = aov.orders[#aov.orders]
+check(ro.kind == "roll_packs" and ro.when == "next_ideal" and ro.account == "Whousleaks" and #M.sent == 0, "roll button writes an order and sends nothing itself")
+btnOf(findText(g4, "Cancel the roll")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+aov = HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+check(aov.orders[#aov.orders].kind == "cancel" and aov.orders[#aov.orders].target == ro.id, "cancel names the roll order")
+w4.stop() M.run(M.now + 10)
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+_G.__ACCF_LOAD = nil
 
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
