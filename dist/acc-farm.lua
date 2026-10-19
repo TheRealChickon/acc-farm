@@ -1228,6 +1228,25 @@ betaTab:Button("Start speed steering", function()
 	startHelper("steer", function() _G.__BS_CTX = core.ctx _G.__ST_TOWER = steerTower _G.__ST_WAVE = steerWave end)
 end)
 betaTab:Button("Stop speed steering", function() _G.__ST_STOP = true core.say("speed steering stop sent") end)
+betaTab:Line("Equip a technique to a card (one command each, never automatic)")
+betaTab:Label("Main game: techniqueId + base card id, e.g. fishermans_assault + awakened_sunblaze_shinigami. Deity: card id with rarity (card:rarity). The tower thread decides what goes where.")
+local techId, techCard = "", ""
+betaTab:Textbox("Technique id", false, false, function(v) techId = v end)
+betaTab:Textbox("Card id", false, false, function(v) techCard = v end)
+local function oneCommand(name, ...)
+	if not core.isMain() then lib:Notification("Not on this account", "Whousleaks only.", nil, "Okay") return end
+	local ok, err = core.init()
+	if not ok then lib:Notification("Can't send", err, nil, "Okay") return end
+	local other = core.otherScriptRunning()
+	if other then lib:Notification("Game is busy", "Another script controls the game right now.", nil, "Okay") return end
+	if techId == "" then lib:Notification("Missing", "Type the technique id first.", nil, "Okay") return end
+	core.say("equip command", name, techId, techCard)
+	core.send(name, ...)
+end
+betaTab:Button("Equip (main game)", function() if techCard == "" then lib:Notification("Missing", "Type the card id too.", nil, "Okay") return end oneCommand("equipTechnique", techId, techCard) end)
+betaTab:Button("Unequip (main game)", function() oneCommand("unequipTechnique", techId) end)
+betaTab:Button("Equip (Tower of Deity)", function() if techCard == "" then lib:Notification("Missing", "Type the card id too.", nil, "Okay") return end oneCommand("towerOfDeityAction", { kind = "equipTechnique", card = techCard, technique = techId }) end)
+betaTab:Button("Unequip (Tower of Deity)", function() oneCommand("towerOfDeityAction", { kind = "equipTechnique", card = techCard ~= "" and techCard or nil, technique = nil }) end)
 betaTab:Line("Ranked")
 betaTab:Label("No ranked season right now (season 11 is not out). The recorder only reads, so it can run next to the farm.")
 betaTab:Button("Start ranked recorder (read only)", function()
@@ -1239,20 +1258,22 @@ betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
 -- Planner (the director's two files; see src/planner.lua)
 plannerTab:Line("What the director runs")
 local plStatus = plannerTab:Label("No director status yet.")
-plannerTab:Line("Director settings (change one field, it is saved at once)")
-local plLeaves = planner.leaves(core.readJson(planner.CONFIG))
-if #plLeaves == 0 then
-	plannerTab:Label("No director settings found (" .. planner.CONFIG .. "). Close and reopen the window after the director has written it.")
+plannerTab:Line("Director settings (the director applies a change within 5 minutes)")
+local plControls = planner.controls(core.readJson(planner.CONFIG), core.readJson(planner.OVERRIDES))
+if #plControls == 0 then
+	plannerTab:Label("No director settings found (" .. planner.CONFIG .. " has no \"editable\" list yet). Close and reopen the window after the director has written it.")
 end
-for _, lf in ipairs(plLeaves) do
-	local title = planner.pathText(lf.path)
-	local function put(v) if not PREVIEW then local ok, err = planner.setField(lf.path, v) if not ok then lib:Notification("Not saved", err, nil, "Okay") end end end
-	if lf.kind == "boolean" then plannerTab:Toggle(title, lf.value, put)
-	elseif lf.kind == "number" then plannerTab:Textbox(title, true, false, put):Set(lf.value)
-	elseif lf.kind == "list" then
-		local shown = {} for _, x in ipairs(lf.value) do table.insert(shown, tostring(x)) end
-		plannerTab:Textbox(title .. " (comma list)", false, false, function(t) put(planner.parseList(t)) end):Set(table.concat(shown, ", "))
-	else plannerTab:Textbox(title, false, false, put):Set(lf.value) end
+plannerTab:Label("Hard bans (Dream tower, Joyride, memory floor) cannot be changed here. Refused changes show in the status above under rejected_overrides.")
+for _, ctl in ipairs(plControls) do
+	local title = ctl.key .. (ctl.pending and "  (waiting for the director)" or "")
+	local function put(v)
+		local val, why = planner.check(ctl, v)
+		if val == nil then lib:Notification("Not saved", ctl.key .. ": " .. tostring(why), nil, "Okay") return end
+		if not PREVIEW then planner.setOverride(ctl.key, val) end
+	end
+	if ctl.kind == "bool" then plannerTab:Toggle(title, ctl.value == true, put)
+	elseif ctl.kind == "enum" then plannerTab:Dropdown(title, ctl.values or {}, put):Set(ctl.value, true)
+	else plannerTab:Textbox(title, true, false, put):Set(ctl.value ~= nil and ctl.value or "") end
 end
 
 -- Status
@@ -1315,63 +1336,70 @@ local planner = { CONFIG = "AnimeCardClash/director_config.json", STATUS = "Anim
 
 local function isArray(t) return type(t) == "table" and (#t > 0 or next(t) == nil) end
 
--- config leaves as { {path = {"weights","luck_factor"}, value = 0.25, kind = "number"|"boolean"|"string"}, ... }, sorted by path text
-function planner.leaves(cfg)
+-- The director's config mirror says what may be changed: "editable" = { ["dotted.key"] = {kind = float|int|bool|enum, min, max | values} }.
+-- Only those keys get a control. A change goes to AnimeCardClash/director_overrides.json as {"set": {"dotted.key": value}}; the director
+-- applies valid keys on its next round (max 5 min) and lists refused ones under rejected_overrides (config + status files).
+planner.OVERRIDES = "AnimeCardClash/director_overrides.json"
+
+local function walk(cfg, dotted)
+	local t = cfg
+	for part in string.gmatch(dotted, "[^%.]+") do
+		if type(t) ~= "table" then return nil end
+		local n = tonumber(part)
+		if n and t[n + 1] ~= nil then t = t[n + 1] else t = t[part] end   -- "orders.0" = first list entry
+	end
+	return t
+end
+planner.walk = walk
+
+-- editable controls as { {key = "weights.completion_card_M", kind = "float", value = 0.5, min, max, values}, ...}, sorted by key
+function planner.controls(cfg, overrides)
 	local out = {}
-	local function walk(t, path)
-		if type(t) ~= "table" or #out >= planner.MAXROWS then return end
-		local keys = {}
-		for k in pairs(t) do table.insert(keys, k) end
-		table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
-		for _, k in ipairs(keys) do
-			local v, p = t[k], { table.unpack(path) }
-			table.insert(p, k)
-			local tv = type(v)
-			if tv == "number" or tv == "boolean" or tv == "string" then table.insert(out, { path = p, value = v, kind = tv })
-			elseif tv == "table" and not isArray(v) then walk(v, p)
-			elseif tv == "table" then   -- list of plain values -> one comma text field
-				local plain = true
-				for _, x in ipairs(v) do if type(x) == "table" then plain = false end end
-				if plain then table.insert(out, { path = p, value = v, kind = "list" }) end
-			end
+	if type(cfg) ~= "table" or type(cfg.editable) ~= "table" then return out end
+	local pending = type(overrides) == "table" and type(overrides.set) == "table" and overrides.set or {}
+	local keys = {}
+	for k in pairs(cfg.editable) do table.insert(keys, k) end
+	table.sort(keys)
+	for _, k in ipairs(keys) do
+		if #out >= planner.MAXROWS then break end
+		local spec = cfg.editable[k]
+		if type(spec) == "table" then
+			local v = walk(cfg, k)
+			local shown = pending[k] ~= nil and pending[k] or v
+			table.insert(out, { key = k, kind = spec.kind, value = shown, min = spec.min, max = spec.max, values = spec.values, pending = pending[k] ~= nil })
 		end
 	end
-	walk(cfg or {}, {})
 	return out
 end
 
-function planner.pathText(path)
-	local o = {}
-	for _, k in ipairs(path) do table.insert(o, tostring(k)) end
-	return table.concat(o, " / ")
+-- checks a typed value against the spec; returns the value to send or nil + why
+function planner.check(ctl, v)
+	if ctl.kind == "bool" then return v == true end
+	if ctl.kind == "enum" then
+		for _, x in ipairs(ctl.values or {}) do if x == v then return v end end
+		return nil, "not one of the allowed values"
+	end
+	local n = tonumber(v)
+	if not n then return nil, "not a number" end
+	if ctl.kind == "int" then n = math.floor(n + 0.5) end
+	if ctl.min and n < ctl.min then return nil, "below the minimum " .. ctl.min end
+	if ctl.max and n > ctl.max then return nil, "above the maximum " .. ctl.max end
+	return n
 end
 
--- writes one field: reads the file fresh, changes only that path, saves (the director may have changed other fields meanwhile)
-function planner.setField(path, value)
-	local cfg = core.readJson(planner.CONFIG)
-	if type(cfg) ~= "table" then return false, "config file not found" end
-	local t = cfg
-	for i = 1, #path - 1 do
-		if type(t[path[i]]) ~= "table" then return false, "field vanished" end
-		t = t[path[i]]
-	end
-	t[path[#path]] = value
-	core.writeJson(planner.CONFIG, cfg)
+-- adds one key to the overrides file: reads it fresh, changes only that key, writes it back
+function planner.setOverride(key, value)
+	local o = core.readJson(planner.OVERRIDES)
+	if type(o) ~= "table" then o = {} end
+	if type(o.set) ~= "table" then o.set = {} end
+	o.set[key] = value
+	core.writeJson(planner.OVERRIDES, o)
 	return true
 end
 
-function planner.parseList(s)
-	local o = {}
-	for part in string.gmatch(s, "[^,]+") do
-		local v = part:gsub("^%s+", ""):gsub("%s+$", "")
-		if v ~= "" then table.insert(o, tonumber(v) or v) end
-	end
-	return o
-end
-
 -- a readable text for the status file; picks the usual name / state / score fields of list rows, shows everything else as key: value
-local NAMEKEYS = { "name", "activity", "title", "mode", "label", "id", "key" }
-local EXTRA = { "state", "score", "value", "chance", "reason", "why", "eta" }
+local NAMEKEYS = { "name", "activity", "title", "mode", "label", "consumer", "id", "key" }
+local EXTRA = { "state", "score", "now", "target", "delta", "value", "chance", "reason", "why", "eta" }
 local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 local function short(v)
 	if type(v) == "number" then return (v == math.floor(v)) and tostring(v) or string.format("%.2f", v) end
@@ -1393,9 +1421,10 @@ end
 function planner.statusText(st)
 	if type(st) ~= "table" then return "No director status yet (the director has not written " .. planner.STATUS .. ")." end
 	local lines, keys = {}, {}
-	for k in pairs(st) do table.insert(keys, k) end
+	if type(st.text) == "string" then table.insert(lines, esc(st.text)) end
+	for k in pairs(st) do if k ~= "text" and k ~= "updated" then table.insert(keys, k) end end
 	table.sort(keys, function(a, b)   -- the usual headline fields first
-		local order = { now = 1, running = 1, next = 2, decisions = 3, ranking = 4, plan = 5, workers = 6, warnings = 7 }
+		local order = { now = 1, running = 1, next = 2, decisions_for_sami = 3, ranking = 4, plan = 5, workers = 6, warnings = 7, rejected_overrides = 8 }
 		local oa, ob = order[a] or 9, order[b] or 9
 		if oa ~= ob then return oa < ob end
 		return tostring(a) < tostring(b)
@@ -1415,7 +1444,12 @@ function planner.statusText(st)
 			table.sort(sub, function(a, b) return tostring(a) < tostring(b) end)
 			for i = 1, math.min(#sub, 8) do
 				local v2 = v[sub[i]]
-				table.insert(lines, "  " .. esc(sub[i]) .. ": " .. (type(v2) == "table" and rowText(v2) or short(v2)))
+				if type(v2) == "table" and isArray(v2) then
+					table.insert(lines, "  " .. esc(sub[i]))
+					for j = 1, math.min(#v2, 6) do table.insert(lines, "    " .. rowText(v2[j])) end
+				else
+					table.insert(lines, "  " .. esc(sub[i]) .. ": " .. (type(v2) == "table" and rowText(v2) or short(v2)))
+				end
 			end
 		end
 	end

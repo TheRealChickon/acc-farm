@@ -299,6 +299,25 @@ betaTab:Button("Start speed steering", function()
 	startHelper("steer", function() _G.__BS_CTX = core.ctx _G.__ST_TOWER = steerTower _G.__ST_WAVE = steerWave end)
 end)
 betaTab:Button("Stop speed steering", function() _G.__ST_STOP = true core.say("speed steering stop sent") end)
+betaTab:Line("Equip a technique to a card (one command each, never automatic)")
+betaTab:Label("Main game: techniqueId + base card id, e.g. fishermans_assault + awakened_sunblaze_shinigami. Deity: card id with rarity (card:rarity). The tower thread decides what goes where.")
+local techId, techCard = "", ""
+betaTab:Textbox("Technique id", false, false, function(v) techId = v end)
+betaTab:Textbox("Card id", false, false, function(v) techCard = v end)
+local function oneCommand(name, ...)
+	if not core.isMain() then lib:Notification("Not on this account", "Whousleaks only.", nil, "Okay") return end
+	local ok, err = core.init()
+	if not ok then lib:Notification("Can't send", err, nil, "Okay") return end
+	local other = core.otherScriptRunning()
+	if other then lib:Notification("Game is busy", "Another script controls the game right now.", nil, "Okay") return end
+	if techId == "" then lib:Notification("Missing", "Type the technique id first.", nil, "Okay") return end
+	core.say("equip command", name, techId, techCard)
+	core.send(name, ...)
+end
+betaTab:Button("Equip (main game)", function() if techCard == "" then lib:Notification("Missing", "Type the card id too.", nil, "Okay") return end oneCommand("equipTechnique", techId, techCard) end)
+betaTab:Button("Unequip (main game)", function() oneCommand("unequipTechnique", techId) end)
+betaTab:Button("Equip (Tower of Deity)", function() if techCard == "" then lib:Notification("Missing", "Type the card id too.", nil, "Okay") return end oneCommand("towerOfDeityAction", { kind = "equipTechnique", card = techCard, technique = techId }) end)
+betaTab:Button("Unequip (Tower of Deity)", function() oneCommand("towerOfDeityAction", { kind = "equipTechnique", card = techCard ~= "" and techCard or nil, technique = nil }) end)
 betaTab:Line("Ranked")
 betaTab:Label("No ranked season right now (season 11 is not out). The recorder only reads, so it can run next to the farm.")
 betaTab:Button("Start ranked recorder (read only)", function()
@@ -310,20 +329,22 @@ betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
 -- Planner (the director's two files; see src/planner.lua)
 plannerTab:Line("What the director runs")
 local plStatus = plannerTab:Label("No director status yet.")
-plannerTab:Line("Director settings (change one field, it is saved at once)")
-local plLeaves = planner.leaves(core.readJson(planner.CONFIG))
-if #plLeaves == 0 then
-	plannerTab:Label("No director settings found (" .. planner.CONFIG .. "). Close and reopen the window after the director has written it.")
+plannerTab:Line("Director settings (the director applies a change within 5 minutes)")
+local plControls = planner.controls(core.readJson(planner.CONFIG), core.readJson(planner.OVERRIDES))
+if #plControls == 0 then
+	plannerTab:Label("No director settings found (" .. planner.CONFIG .. " has no \"editable\" list yet). Close and reopen the window after the director has written it.")
 end
-for _, lf in ipairs(plLeaves) do
-	local title = planner.pathText(lf.path)
-	local function put(v) if not PREVIEW then local ok, err = planner.setField(lf.path, v) if not ok then lib:Notification("Not saved", err, nil, "Okay") end end end
-	if lf.kind == "boolean" then plannerTab:Toggle(title, lf.value, put)
-	elseif lf.kind == "number" then plannerTab:Textbox(title, true, false, put):Set(lf.value)
-	elseif lf.kind == "list" then
-		local shown = {} for _, x in ipairs(lf.value) do table.insert(shown, tostring(x)) end
-		plannerTab:Textbox(title .. " (comma list)", false, false, function(t) put(planner.parseList(t)) end):Set(table.concat(shown, ", "))
-	else plannerTab:Textbox(title, false, false, put):Set(lf.value) end
+plannerTab:Label("Hard bans (Dream tower, Joyride, memory floor) cannot be changed here. Refused changes show in the status above under rejected_overrides.")
+for _, ctl in ipairs(plControls) do
+	local title = ctl.key .. (ctl.pending and "  (waiting for the director)" or "")
+	local function put(v)
+		local val, why = planner.check(ctl, v)
+		if val == nil then lib:Notification("Not saved", ctl.key .. ": " .. tostring(why), nil, "Okay") return end
+		if not PREVIEW then planner.setOverride(ctl.key, val) end
+	end
+	if ctl.kind == "bool" then plannerTab:Toggle(title, ctl.value == true, put)
+	elseif ctl.kind == "enum" then plannerTab:Dropdown(title, ctl.values or {}, put):Set(ctl.value, true)
+	else plannerTab:Textbox(title, true, false, put):Set(ctl.value ~= nil and ctl.value or "") end
 end
 
 -- Status

@@ -47,9 +47,16 @@ Stop: `getgenv().ACC_STOP()`. The window is only an editor for the same file.
 
 ## Planner tab (farm director)
 
-Reads `AnimeCardClash/director_status.json` (what runs now / next, ranking, workers, decisions) and lists every number, on-off
-and text field of `AnimeCardClash/director_config.json`; one change writes only that field (the file is re-read first, so the
-director's own newer changes are kept). Preview without touching the game: `getgenv().ACC_PREVIEW = true`.
+Reads `AnimeCardClash/director_status.json` (what runs now / next, ranking, workers, decisions, refused changes) and shows a control for
+every key in the `editable` list of `AnimeCardClash/director_config.json` (a read-only mirror). A change is added to
+`AnimeCardClash/director_overrides.json` as `{"set": {"dotted.key": value}}` (file re-read first, only its own key changed); the
+director applies it within 5 minutes. Hard bans (Dream tower, Joyride, memory floor) cannot be changed from here.
+Preview without touching the game: `getgenv().ACC_PREVIEW = true`.
+
+## Beta tab: equip a technique
+
+Four buttons, one command each, never automatic: equip / unequip in the main game (`equipTechnique`, `unequipTechnique`) and in the
+Tower of Deity (`towerOfDeityAction` equipTechnique). Not run in the game yet.
 
 ## Accounts
 

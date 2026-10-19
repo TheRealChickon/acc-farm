@@ -158,7 +158,7 @@ function workspace:GetServerTimeNow() M.now += 0.0005 return M.now end
 -- remotes, in a folder like the game's
 local net = newInstance("Folder", "network@eventDefinitions") net.Parent = RS
 for _, n in ipairs({ "fightBattleTowerWave", "setPartyPosition", "removePartyPosition", "forfeitBattle", "setBattleSessionDisplayState",
-	"teleport", "fightStoryBoss", "fightInfinite", "pauseInfinite", "useBackpackItem", "claimDailyLogin", "claimDailyQuest", "fightStorySkip" }) do
+	"teleport", "fightStoryBoss", "fightInfinite", "pauseInfinite", "useBackpackItem", "claimDailyLogin", "claimDailyQuest", "fightStorySkip", "equipTechnique", "unequipTechnique", "towerOfDeityAction" }) do
 	local r = newInstance("RemoteEvent", n) r.Parent = net
 end
 -- a debug copy that must be ignored

@@ -278,30 +278,52 @@ farm.stop()
 M.run(M.now + 30)
 _G.__ACCF_LOAD = nil
 game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
-M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ accounts = { "Whousleaks", "Umson_42" }, weights = { luck_factor = 0.25, completion_card_M = 0.5 },
-	rules = { event_policy = "fixed", second_general_slot = false }, workers = { cap = 20 } })
-M.files["AnimeCardClash/director_status.json"] = HS:JSONEncode({ updated = os.time(), now = { { name = "Cyberpunk event run", state = "running" } },
-	ranking = { { name = "Shinsu Training", score = 2.31, state = "can start" } }, workers = { cap = 20, used = 14 }, warnings = { "x <b>" } })
+M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ accounts = { "Whousleaks", "Umson_42" }, weights = { completion_card_M = 0.5, luck_M_per_pct = 2.7 },
+	rules = { event_policy = "fixed" }, workers = { ram_floor_gb = 2, orders = { { tower_side_share = 0.8 } } }, allowed = { modes = { forest = { allowed = true } } },
+	editable = { ["weights.completion_card_M"] = { kind = "float", min = 0, max = 5 }, ["rules.event_policy"] = { kind = "enum", values = { "fixed", "free" } },
+		["workers.ram_floor_gb"] = { kind = "int", min = 2, max = 8 }, ["workers.orders.0.tower_side_share"] = { kind = "float", min = 0, max = 1 },
+		["allowed.modes.forest.allowed"] = { kind = "bool" } } })
+M.files["AnimeCardClash/director_status.json"] = HS:JSONEncode({ updated = os.time(), text = "Event running, Shinsu Training next.", ranking = { { name = "Shinsu Training", score = 2.31, state = "can start" } },
+	workers = { rows = { { consumer = "cp_search", now = 3, target = 1, delta = -2, why = "event side" } } }, decisions_for_sami = { { name = "set luck weight" } }, rejected_overrides = { ["horizon_h"] = "out of range" } })
 M.files["acc-farm/settings.json"] = HS:JSONEncode({})
 local pl
 task.spawn(function() pl = loadstring(M.files.LOADER)() end)
 M.run(M.now + 5)
 local g2 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
-check(findText(g2, "weights / luck_factor") ~= nil, "director setting luck_factor listed")
-check(findText(g2, "rules / second_general_slot") ~= nil, "on-off setting listed")
-check(findText(g2, "Shinsu Training") ~= nil and findText(g2, "Cyberpunk event run") ~= nil, "status shows what runs and the ranking")
-local sw = findText(g2, "rules / second_general_slot").Parent:FindFirstChildOfClass("TextButton")
-sw.MouseButton1Click:Fire()
+check(findText(g2, "weights.completion_card_M") ~= nil and findText(g2, "allowed.modes.forest.allowed") ~= nil, "only the director's editable settings are listed")
+check(findText(g2, "weights.luck_M_per_pct") == nil and findText(g2, "accounts") == nil, "read-only fields get no control")
+check(findText(g2, "Event running, Shinsu Training next.") ~= nil and findText(g2, "cp_search") ~= nil and findText(g2, "horizon_h") ~= nil, "status text, workers and refused changes shown")
+findText(g2, "allowed.modes.forest.allowed").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
 M.run(M.now + 1)
-local c2 = HS:JSONDecode(M.files["AnimeCardClash/director_config.json"])
-check(c2.rules.second_general_slot == true and c2.weights.luck_factor == 0.25 and c2.workers.cap == 20 and c2.rules.event_policy == "fixed", "one switch changes only that field")
-M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ accounts = { "Whousleaks" }, weights = { luck_factor = 0.25 }, rules = { second_general_slot = true }, extra = 7 })
-local tb = findText(g2, "weights / luck_factor").Parent:FindFirstChildOfClass("TextBox")
-tb.Text = "0.4"
-tb.FocusLost:Fire()
+local ov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(ov.set["allowed.modes.forest.allowed"] == false, "a switch goes to director_overrides.json only")
+check(HS:JSONDecode(M.files["AnimeCardClash/director_config.json"]).allowed.modes.forest.allowed == true, "the config mirror is never written")
+M.files["AnimeCardClash/director_overrides.json"] = HS:JSONEncode({ set = { ["horizon_h"] = 8 } })   -- the director's side added a key meanwhile
+local tb = findText(g2, "weights.completion_card_M").Parent:FindFirstChildOfClass("TextBox")
+tb.Text = "0.7" tb.FocusLost:Fire()
 M.run(M.now + 1)
-local c3 = HS:JSONDecode(M.files["AnimeCardClash/director_config.json"])
-check(c3.weights.luck_factor == 0.4 and c3.extra == 7, "a field typed in keeps the director's own newer changes")
+local o2 = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(o2.set["weights.completion_card_M"] == 0.7 and o2.set.horizon_h == 8, "a typed number keeps the other keys in the file")
+local tb2 = findText(g2, "workers.ram_floor_gb").Parent:FindFirstChildOfClass("TextBox")
+tb2.Text = "1" tb2.FocusLost:Fire()
+M.run(M.now + 1)
+check(HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"]).set["workers.ram_floor_gb"] == nil, "a value below the minimum is refused")
+-- equip commands (Beta tab)
+game:GetService("Players").LocalPlayer.Name = "Whousleaks"
+M.sent = {}
+local function box(t) return findText(g2, t).Parent:FindFirstChildOfClass("TextBox") end
+local b1, b2 = box("Technique id"), box("Card id")
+b1.Text = "fishermans_assault" b1.FocusLost:Fire() b2.Text = "pumpkin_witch_cat" b2.FocusLost:Fire()
+M.run(M.now + 1)
+findText(g2, "Equip (main game)").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
+M.run(M.now + 30)
+local eq = M.sent[#M.sent]
+for _, x in ipairs(M.sent) do if x.name == "equipTechnique" then eq = x end end
+check(eq and eq.name == "equipTechnique" and eq.args[1] == "fishermans_assault" and eq.args[2] == "pumpkin_witch_cat", "equip button sends equipTechnique(techniqueId, cardId)")
+findText(g2, "Equip (Tower of Deity)").Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire()
+M.run(M.now + 5)
+local ed = M.sent[#M.sent]
+check(ed and ed.name == "towerOfDeityAction" and ed.args[1].kind == "equipTechnique" and ed.args[1].card == "pumpkin_witch_cat", "Deity equip sends towerOfDeityAction")
 pl.stop() M.run(M.now + 10)
 game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
 _G.__ACCF_LOAD = nil
