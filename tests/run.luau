@@ -391,4 +391,41 @@ game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
 _G.__ACCF_LOAD = nil
 check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
 
+log("13) focus and manual priority go to the planner's file")
+M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ focus = "auto", editable = { focus = { kind = "enum", values = { "auto", "luck", "traits", "packs" } } } })
+M.files["AnimeCardClash/director_status.json"] = HS:JSONEncode({ updated = os.time(), text = "x",
+	queue = { { rank = 1, id = "story_tower:sword_of_hope", label = "Sword of Hope", draggable = true }, { rank = 2, id = "deity:training", label = "Shinsu Training", draggable = true },
+		{ rank = 3, id = "tower:toon_x:1", label = "Dream", draggable = false } },
+	override = { mode = "auto", expired = false, remaining_s = 0 } })
+M.files["AnimeCardClash/director_overrides.json"] = HS:JSONEncode({ set = { horizon_h = 8 } })
+M.files["AnimeCardClash/autopilot_overrides.json"] = nil
+_G.__ACCF_LOAD = nil
+local w4
+task.spawn(function() w4 = loadstring(M.files.LOADER)() end)
+M.run(M.now + 5)
+local g4 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
+local packsRadio
+for _, d in ipairs(g4:GetDescendants()) do if d.Text == "Packs" and d.Parent and d.Parent.Name == "RadioBtn" then packsRadio = d.Parent end end
+check(packsRadio ~= nil, "focus radio found")
+packsRadio.MouseButton1Click:Fire()
+M.run(M.now + 1)
+local dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.set.focus == "packs" and dov.set.horizon_h == 8 and M.files["AnimeCardClash/autopilot_overrides.json"] == nil, "focus goes to director_overrides.json, other keys kept")
+check(findText(g4, ".  Shinsu Training") ~= nil and findText(g4, ".  Dream") == nil, "priority list shows the movable rows only")
+-- move Sword of Hope (row 1 of the priority list) down
+local row1 = findText(g4, "1.  Sword of Hope").Parent
+for _, c in ipairs(row1:GetChildren()) do if c.Text == "▼" then c.MouseButton1Click:Fire() end end
+M.run(M.now + 1)
+btnOf(findText(g4, "Use my order")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.mode == "manual" and dov.queue_order[1] == "deity:training" and dov["until"] > os.time() and dov.set.focus == "packs", "my order is written with an expiry, focus kept")
+btnOf(findText(g4, "Back to automatic")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
+check(dov.mode == "auto" and #dov.queue_order == 0, "back to automatic clears my order")
+w4.stop() M.run(M.now + 10)
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+_G.__ACCF_LOAD = nil
+
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))

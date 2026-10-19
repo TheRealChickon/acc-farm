@@ -1382,14 +1382,45 @@ local focusNames = {}
 for _, f in ipairs(autopilot.FOCUSES) do table.insert(focusNames, autopilot.FOCUS_NAMES[f]) end
 local focusById = {} for _, f in ipairs(autopilot.FOCUSES) do focusById[autopilot.FOCUS_NAMES[f]] = f end
 local focusReady = false
+-- one place for the focus: the planner's overrides file (it turns the focus into weights); older planners: the autopilot's own file
+local dirCfg = core.readJson(planner.CONFIG) or {}
+local function dirEditable(key) return type(dirCfg.editable) == "table" and dirCfg.editable[key] ~= nil end
 local focusRow = autoTab:RadioButtons("What to go for", focusNames, function(v)
 	if not focusReady or PREVIEW then return end
-	if not autopilot.editable(apCfg, "focus") then lib:Notification("Not saved", "The autopilot config has no editable focus yet.", nil, "Okay") return end
-	autopilot.setOverride("focus", focusById[v])
+	if dirEditable("focus") then planner.setOverride("focus", focusById[v])
+	elseif autopilot.editable(apCfg, "focus") then autopilot.setOverride("focus", focusById[v])
+	else lib:Notification("Not saved", "The planner has no editable focus yet.", nil, "Okay") end
 end)
-focusRow:Set(autopilot.FOCUS_NAMES[apCfg.focus or "auto"] or "Auto", true)
+focusRow:Set(autopilot.FOCUS_NAMES[dirCfg.focus or apCfg.focus or "auto"] or "Auto", true)
 focusReady = true
 autoTab:Label("Auto = the autopilot picks (luck first while cheap luck is open, then packs). The PC takes a change within 5 minutes.")
+autoTab:Line("Priority (your order wins for a while, then it goes back to automatic)")
+local qStatus = autoTab:Label("")
+local dirSt = core.readJson(planner.STATUS) or {}
+local qItems = {}
+for _, r in ipairs(type(dirSt.queue) == "table" and dirSt.queue or {}) do
+	if r.draggable ~= false and r.id then table.insert(qItems, { id = r.id, name = tostring(r.label or r.id) }) end
+end
+local qList = autoTab:Order("Drag order (top runs first when it may)", qItems, function() end)
+local qHours = 2
+autoTab:Slider("Keep my order for (hours)", false, 1, 24, qHours, function(v) qHours = v end)
+autoTab:Button("Use my order", function()
+	if PREVIEW then return end
+	local o = core.readJson(planner.OVERRIDES)
+	if type(o) ~= "table" then o = {} end
+	o.mode, o.queue_order, o["until"], o.by = "manual", qList:Get(), os.time() + qHours * 3600, "game window"
+	o.rev = (tonumber(o.rev) or 0) + 1
+	core.writeJson(planner.OVERRIDES, o)
+	lib:Notification("Priority", "Your order is used for " .. qHours .. " h. The planner takes it within 5 minutes.", nil, "Okay")
+end)
+autoTab:Button("Back to automatic", function()
+	if PREVIEW then return end
+	local o = core.readJson(planner.OVERRIDES)
+	if type(o) ~= "table" then o = {} end
+	o.mode, o.queue_order, o.skip, o["until"] = "auto", {}, {}, nil
+	o.rev = (tonumber(o.rev) or 0) + 1
+	core.writeJson(planner.OVERRIDES, o)
+end)
 autoTab:Line("Quick jobs")
 local apJobs = autoTab:Paragraph("")
 autoTab:Line("Which jobs it may plan")
@@ -1458,6 +1489,10 @@ task.spawn(function()
 		logLabel:SetText(table.concat(core.log, "\n", 1, math.min(#core.log, 12)))
 		plStatus:SetText(planner.statusText(core.readJson(planner.STATUS)))
 		local apSt = core.readJson(autopilot.STATUS)
+		local ds = core.readJson(planner.STATUS)
+		local ov = type(ds) == "table" and ds.override or nil
+		qStatus:SetText(type(ov) == "table" and ov.mode == "manual" and not ov.expired
+			and string.format("Your order is on (%d min left).", math.floor((tonumber(ov.remaining_s) or 0) / 60)) or "Automatic priority.")
 		apStatus:SetText(autopilot.statusText(apSt, LP.Name))
 		apJobs:SetText(autopilot.jobsText(apSt, LP.Name))
 		local appr = autopilot.approved(apSt)
