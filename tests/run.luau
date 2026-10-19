@@ -424,6 +424,16 @@ btnOf(findText(g4, "Back to automatic")).MouseButton1Click:Fire()
 M.run(M.now + 1)
 dov = HS:JSONDecode(M.files["AnimeCardClash/director_overrides.json"])
 check(dov.mode == "auto" and #dov.queue_order == 0, "back to automatic clears my order")
+M.sent = {}
+btnOf(findText(g4, "ROLL PACKS ON NEXT IDEAL TIME")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+local aov = HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+local ro = aov.orders[#aov.orders]
+check(ro.kind == "roll_packs" and ro.when == "next_ideal" and ro.account == "Whousleaks" and #M.sent == 0, "roll button writes an order and sends nothing itself")
+btnOf(findText(g4, "Cancel the roll")).MouseButton1Click:Fire()
+M.run(M.now + 1)
+aov = HS:JSONDecode(M.files["AnimeCardClash/autopilot_overrides.json"])
+check(aov.orders[#aov.orders].kind == "cancel" and aov.orders[#aov.orders].target == ro.id, "cancel names the roll order")
 w4.stop() M.run(M.now + 10)
 game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
 _G.__ACCF_LOAD = nil

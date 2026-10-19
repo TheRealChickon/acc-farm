@@ -399,6 +399,24 @@ autoTab:Button("Back to automatic", function()
 	o.rev = (tonumber(o.rev) or 0) + 1
 	core.writeJson(planner.OVERRIDES, o)
 end)
+autoTab:Line("Packs with perfect luck")
+autoTab:Label("Deck 1, server luck, every best potion and elixir, a good moon (natural first, then rerolls), then all packs. Stops at the first problem.")
+local rollLabel = autoTab:Label("")
+local lastRollId = nil
+autoTab:Button("ROLL PACKS ON NEXT IDEAL TIME", function()
+	if PREVIEW then return end
+	lastRollId = autopilot.order("roll_packs", LP.Name)
+	lib:Notification("Packs", "Ordered. The PC plans it within 5 minutes, then the game waits for a good moon.", nil, "Okay")
+end)
+autoTab:Button("Cancel the roll", function()
+	if PREVIEW then return end
+	local st = core.readJson(autopilot.STATUS)
+	local last = autopilot.lastRoll(st, LP.Name)
+	local target = lastRollId or (last and last.id)
+	if not target then lib:Notification("Packs", "No roll order to cancel.", nil, "Okay") return end
+	_G.__PS_STOP = true
+	autopilot.order("cancel", LP.Name, target)
+end)
 autoTab:Line("Quick jobs")
 local apJobs = autoTab:Paragraph("")
 autoTab:Line("Which jobs it may plan")
@@ -473,6 +491,8 @@ task.spawn(function()
 			and string.format("Your order is on (%d min left).", math.floor((tonumber(ov.remaining_s) or 0) / 60)) or "Automatic priority.")
 		apStatus:SetText(autopilot.statusText(apSt, LP.Name))
 		apJobs:SetText(autopilot.jobsText(apSt, LP.Name))
+		local lr = autopilot.lastRoll(apSt, LP.Name)
+		rollLabel:SetText(lr and ("Last roll order: " .. tostring(lr.state) .. (lr.why and (" · " .. tostring(lr.why)) or "")) or "No roll order yet.")
 		local appr = autopilot.approved(apSt)
 		apLive:SetText(#appr > 0 and ("Approved for live play: " .. table.concat(appr, ", ")) or "Approved for live play: nothing yet (plan only).")
 		local bar = (running and ("Farm: " .. tostring(core.status)) or "Farm stopped")

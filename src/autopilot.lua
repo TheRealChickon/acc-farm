@@ -83,6 +83,29 @@ function ap.barText(status, name)
 	return string.format("Autopilot · %s · next: %s", ap.FOCUS_NAMES[f.effective] or tostring(f.effective or "?"), tostring(a.next or "-"))
 end
 
+-- a roll order (the strict perfect-luck pack session) or a cancel of the last one; the PC answers in status.json "orders"
+function ap.order(kind, account, target)
+	local cur = core.readJson(ap.OVERRIDES) or {}
+	cur.orders = type(cur.orders) == "table" and cur.orders or {}
+	local id = string.format("%s-%d-%d", kind, os.time(), math.random(1000, 9999))
+	local o = { id = id, kind = kind, account = account, at = os.time(), by = "game window" }
+	if kind == "roll_packs" then o.when = "next_ideal" end
+	if target then o.target = target end
+	table.insert(cur.orders, o)
+	while #cur.orders > 20 do table.remove(cur.orders, 1) end
+	cur.rev = (tonumber(cur.rev) or 0) + 1
+	core.writeJson(ap.OVERRIDES, cur)
+	return id
+end
+
+function ap.lastRoll(status, account)
+	local last
+	for _, o in ipairs(type(status) == "table" and type(status.orders) == "table" and status.orders or {}) do
+		if o.kind == "roll_packs" and o.account == account then last = o end
+	end
+	return last
+end
+
 function ap.approved(status)
 	local l = type(status) == "table" and type(status.live) == "table" and status.live.approved_steps or {}
 	return type(l) == "table" and l or {}
