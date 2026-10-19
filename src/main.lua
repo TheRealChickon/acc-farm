@@ -8,6 +8,7 @@ local towers = import("tasks/towers", core, data, decks)
 local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
 local skip = import("tasks/storyskip", core)
+local planner = import("planner", core)
 
 local LP = game:GetService("Players").LocalPlayer
 -- one settings file per account (Whousleaks keeps the first file name)
@@ -165,6 +166,14 @@ task.spawn(function()
 	end
 end)
 
+-- ---------- script mode: getgenv().ACC_HEADLESS = true -> no window, same settings file, starts at once ----------
+if getgenv().ACC_HEADLESS == true then
+	core.say("script mode: no window; settings in " .. SETTINGS_FILE .. "; stop with getgenv().ACC_STOP() or _G.__ACCF_STOP = true")
+	getgenv().ACC_STOP = stop
+	if not PREVIEW then task.spawn(start) end
+	return { start = start, stop = stop, settings = cfg }
+end
+
 -- ---------- beta helpers (whole scripts from the project; each one controls the game alone, so the farm stops first) ----------
 local farmToggle
 local function startHelper(name, setup)
@@ -195,6 +204,7 @@ local dailyTab = win:Tab("Dailies & events", "rbxassetid://6031302932", TEAL)
 local deckTab = win:Tab("Deck", "rbxassetid://6022668898", BLUE)
 win:Label("Info")
 local betaTab = win:Tab("Beta", "rbxassetid://6031280882", PINK)
+local plannerTab = win:Tab("Planner", "rbxassetid://6031302932", TEAL)
 local statusTab = win:Tab("Status", "rbxassetid://6034509993", PURPLE)
 local setTab = win:Tab("Settings", "rbxassetid://6031280882", GREY)
 
@@ -297,6 +307,25 @@ betaTab:Button("Start ranked recorder (read only)", function()
 end)
 betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
 
+-- Planner (the director's two files; see src/planner.lua)
+plannerTab:Line("What the director runs")
+local plStatus = plannerTab:Label("No director status yet.")
+plannerTab:Line("Director settings (change one field, it is saved at once)")
+local plLeaves = planner.leaves(core.readJson(planner.CONFIG))
+if #plLeaves == 0 then
+	plannerTab:Label("No director settings found (" .. planner.CONFIG .. "). Close and reopen the window after the director has written it.")
+end
+for _, lf in ipairs(plLeaves) do
+	local title = planner.pathText(lf.path)
+	local function put(v) if not PREVIEW then local ok, err = planner.setField(lf.path, v) if not ok then lib:Notification("Not saved", err, nil, "Okay") end end end
+	if lf.kind == "boolean" then plannerTab:Toggle(title, lf.value, put)
+	elseif lf.kind == "number" then plannerTab:Textbox(title, true, false, put):Set(lf.value)
+	elseif lf.kind == "list" then
+		local shown = {} for _, x in ipairs(lf.value) do table.insert(shown, tostring(x)) end
+		plannerTab:Textbox(title .. " (comma list)", false, false, function(t) put(planner.parseList(t)) end):Set(table.concat(shown, ", "))
+	else plannerTab:Textbox(title, false, false, put):Set(lf.value) end
+end
+
 -- Status
 local stLabel = statusTab:Label("Stopped")
 local statLabel = statusTab:Label("")
@@ -322,6 +351,7 @@ task.spawn(function()
 		statLabel:SetText(string.format("Fights won %d · lost %d · jobs %d%s", stats.win, stats.loss, stats.jobs,
 			core.ctx and string.format(" · game memory %d MB", core.mem()) or ""))
 		logLabel:SetText(table.concat(core.log, "\n", 1, math.min(#core.log, 12)))
+		plStatus:SetText(planner.statusText(core.readJson(planner.STATUS)))
 		if core.ctx then
 			local ok, bp = pcall(core.backpack, "main")
 			if ok then

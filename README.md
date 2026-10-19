@@ -40,6 +40,17 @@ Then press **Farm running** on the Farm tab.
 | Speed steering | presses the speed button near each fight's end so the next tower floor starts on a winning second | `steer_helper.py --tower .. --wave ..` |
 | Ranked recorder | only reads ranked offers (no season right now) | `ranked_log.py ingest` |
 
+## Script mode (no window)
+
+`getgenv().ACC_HEADLESS = true` before the loader: no window, same `acc-farm/settings.json` (per account `settings_<name>.json`), starts at once.
+Stop: `getgenv().ACC_STOP()`. The window is only an editor for the same file.
+
+## Planner tab (farm director)
+
+Reads `AnimeCardClash/director_status.json` (what runs now / next, ranking, workers, decisions) and lists every number, on-off
+and text field of `AnimeCardClash/director_config.json`; one change writes only that field (the file is re-read first, so the
+director's own newer changes are kept). Preview without touching the game: `getgenv().ACC_PREVIEW = true`.
+
 ## Accounts
 
 Runs on every account in Settings (default `Whousleaks, Umson_42`). Each account has its own settings file

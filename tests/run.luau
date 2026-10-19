@@ -273,4 +273,51 @@ check(#M.sent == sentBefore and M.getgcCalls == gcBefore, "preview sends no comm
 check(HS:JSONDecode(M.files["acc-farm/settings.json"]).antiAfk == true, "preview does not rewrite the saved settings")
 getgenv().ACC_PREVIEW = nil
 
+log("11) planner tab + script mode")
+farm.stop()
+M.run(M.now + 30)
+_G.__ACCF_LOAD = nil
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ accounts = { "Whousleaks", "Umson_42" }, weights = { luck_factor = 0.25, completion_card_M = 0.5 },
+	rules = { event_policy = "fixed", second_general_slot = false }, workers = { cap = 20 } })
+M.files["AnimeCardClash/director_status.json"] = HS:JSONEncode({ updated = os.time(), now = { { name = "Cyberpunk event run", state = "running" } },
+	ranking = { { name = "Shinsu Training", score = 2.31, state = "can start" } }, workers = { cap = 20, used = 14 }, warnings = { "x <b>" } })
+M.files["acc-farm/settings.json"] = HS:JSONEncode({})
+local pl
+task.spawn(function() pl = loadstring(M.files.LOADER)() end)
+M.run(M.now + 5)
+local g2 = game:GetService("CoreGui"):FindFirstChild("dawidlib")
+check(findText(g2, "weights / luck_factor") ~= nil, "director setting luck_factor listed")
+check(findText(g2, "rules / second_general_slot") ~= nil, "on-off setting listed")
+check(findText(g2, "Shinsu Training") ~= nil and findText(g2, "Cyberpunk event run") ~= nil, "status shows what runs and the ranking")
+local sw = findText(g2, "rules / second_general_slot").Parent:FindFirstChildOfClass("TextButton")
+sw.MouseButton1Click:Fire()
+M.run(M.now + 1)
+local c2 = HS:JSONDecode(M.files["AnimeCardClash/director_config.json"])
+check(c2.rules.second_general_slot == true and c2.weights.luck_factor == 0.25 and c2.workers.cap == 20 and c2.rules.event_policy == "fixed", "one switch changes only that field")
+M.files["AnimeCardClash/director_config.json"] = HS:JSONEncode({ accounts = { "Whousleaks" }, weights = { luck_factor = 0.25 }, rules = { second_general_slot = true }, extra = 7 })
+local tb = findText(g2, "weights / luck_factor").Parent:FindFirstChildOfClass("TextBox")
+tb.Text = "0.4"
+tb.FocusLost:Fire()
+M.run(M.now + 1)
+local c3 = HS:JSONDecode(M.files["AnimeCardClash/director_config.json"])
+check(c3.weights.luck_factor == 0.4 and c3.extra == 7, "a field typed in keeps the director's own newer changes")
+pl.stop() M.run(M.now + 10)
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+_G.__ACCF_LOAD = nil
+getgenv().ACC_HEADLESS = true
+M.sent = {}
+M.files["acc-farm/settings.json"] = HS:JSONEncode({ enabled = { dailies = true, tower_repeat = false, story_repeat = false, tower_clear = false, story_clear = false } })
+M.user.questProgress.daily = { { claimed = false, idx = 1 } }
+local hl
+task.spawn(function() hl = loadstring(M.files.LOADER)() end)
+M.run(M.now + 120)
+check(hl ~= nil and game:GetService("CoreGui"):FindFirstChild("dawidlib") == nil, "script mode opens no window")
+local dc = 0 for _, x in ipairs(M.sent) do if x.name == "claimDailyQuest" or x.name == "claimDailyLogin" then dc += 1 end end
+check(dc >= 1, "script mode farms from the settings file")
+getgenv().ACC_STOP()
+M.run(M.now + 30)
+getgenv().ACC_HEADLESS = nil
+check(#M.violations == 0, "no rule broken (" .. table.concat(M.violations, "; ") .. ")")
+
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
