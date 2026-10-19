@@ -982,7 +982,15 @@ for _, t in ipairs(TASKS) do
 	if not found then table.insert(cfg.order, t.id) end
 end
 core.settings = cfg
-local function save() core.writeJson(SETTINGS_FILE, cfg) end
+-- Look-only preview (getgenv().ACC_PREVIEW = true before loading): the window opens with every task off, nothing is saved,
+-- and every button that would read or touch the game (Start, Probe, Read Deck 15, helpers) is refused. No getgc, no commands.
+local PREVIEW = getgenv().ACC_PREVIEW == true
+if PREVIEW then
+	for id in pairs(cfg.enabled) do cfg.enabled[id] = false end
+	cfg.antiAfk = false
+	core.init = function() return false, "Preview only: this window is just for looking. Nothing starts." end
+end
+local function save() if not PREVIEW then core.writeJson(SETTINGS_FILE, cfg) end end
 
 -- ---------- scheduler ----------
 local running, stats = false, { win = 0, loss = 0, jobs = 0 }
@@ -1213,7 +1221,7 @@ betaTab:Button("Stop speed steering", function() _G.__ST_STOP = true core.say("s
 betaTab:Line("Ranked")
 betaTab:Label("No ranked season right now (season 11 is not out). The recorder only reads, so it can run next to the farm.")
 betaTab:Button("Start ranked recorder (read only)", function()
-	if not core.isMain() then return end
+	if not core.isMain() or PREVIEW then lib:Notification("Preview only", "Nothing starts from this window.", nil, "Okay") return end
 	local ok = pcall(run, "helpers/ranked_recorder") core.say(ok and "ranked recorder started" or "ranked recorder failed")
 end)
 betaTab:Button("Stop ranked recorder", function() _G.__RR_STOP = true end)
@@ -1262,7 +1270,7 @@ task.spawn(function()
 	end
 end)
 
-lib:Notification("Card Clash Farm", "Loaded. " .. lib.ToggleKey.Name .. " shows or hides the window.", nil, "Okay")
+lib:Notification("Card Clash Farm" .. (PREVIEW and " (preview)" or ""), "Loaded. " .. lib.ToggleKey.Name .. " shows or hides the window." .. (PREVIEW and " Preview: nothing starts." or ""), nil, "Okay")
 return { start = start, stop = stop, settings = cfg }
 ]===]
 M["tasks/extras"] = [===[

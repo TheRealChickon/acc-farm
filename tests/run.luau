@@ -250,4 +250,27 @@ check(#M.sent == 0, "farm stopped when the Deity helper starts (it controls the 
 _G.__DT_STOP = true
 M.run(M.now + 10)
 
+log("10) look-only preview")
+farm.stop()
+M.run(M.now + 30)
+local gcBefore, sentBefore = M.getgcCalls, #M.sent
+_G.__ACCF_LOAD = nil
+game:GetService("CoreGui"):FindFirstChild("dawidlib"):Destroy()
+M.files["acc-farm/settings.json"] = HS:JSONEncode({ enabled = { dailies = true, tower_repeat = true }, antiAfk = true })
+getgenv().ACC_PREVIEW = true
+local pv
+task.spawn(function() pv = loadstring(M.files.LOADER)() end)
+M.run(M.now + 5)
+local pgui = game:GetService("CoreGui"):FindFirstChild("dawidlib")
+check(pv ~= nil and pgui ~= nil, "preview window opens")
+check(next((function() local t = {} for k, v in pairs(pv.settings.enabled) do if v then t[k] = v end end return t end)()) == nil, "every task is off")
+pv.start()
+M.run(M.now + 5)
+local function clickp(t) findText(pgui, t).Parent:FindFirstChildOfClass("TextButton").MouseButton1Click:Fire() end
+clickp("Probe (read only)") clickp("Read Deck 15") clickp("Start Deity helper") clickp("Start ranked recorder (read only)")
+M.run(M.now + 700)
+check(#M.sent == sentBefore and M.getgcCalls == gcBefore, "preview sends no command and scans nothing")
+check(HS:JSONDecode(M.files["acc-farm/settings.json"]).antiAfk == true, "preview does not rewrite the saved settings")
+getgenv().ACC_PREVIEW = nil
+
 realPrint(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
