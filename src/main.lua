@@ -9,6 +9,7 @@ local story = import("tasks/story", core, data, decks)
 local extras = import("tasks/extras", core, data)
 local skip = import("tasks/storyskip", core)
 local planner = import("planner", core)
+local autopilot = import("autopilot", core)
 
 local LP = game:GetService("Players").LocalPlayer
 -- one settings file per account (Whousleaks keeps the first file name)
@@ -190,6 +191,8 @@ end
 -- ---------- GUI ----------
 lib:ChangeTheme(cfg.theme)
 local win = lib:Window("Card Clash Farm")
+win:Label("Autopilot")
+local autoTab = win:Tab("Autopilot", "rbxassetid://6031302932", Color3.fromRGB(71, 200, 140))
 win:Label("Farm")
 local PINK = Color3.fromRGB(255, 110, 180)
 local RED, ORANGE, YELLOW, GREEN, TEAL, BLUE, PURPLE, GREY =
@@ -203,6 +206,7 @@ local packsTab = win:Tab("Packs", "rbxassetid://6026568210", YELLOW)
 local dailyTab = win:Tab("Dailies & events", "rbxassetid://6031302932", TEAL)
 local deckTab = win:Tab("Deck", "rbxassetid://6022668898", BLUE)
 win:Label("Info")
+local joyTab = win:Tab("Joyride", "rbxassetid://6034287519", Color3.fromRGB(150, 150, 160))
 local betaTab = win:Tab("Beta", "rbxassetid://6031280882", PINK)
 local plannerTab = win:Tab("Planner", "rbxassetid://6031302932", TEAL)
 local statusTab = win:Tab("Status", "rbxassetid://6034509993", PURPLE)
@@ -347,6 +351,64 @@ for _, ctl in ipairs(plControls) do
 	else plannerTab:Textbox(title, true, false, put):Set(ctl.value ~= nil and ctl.value or "") end
 end
 
+-- Autopilot (the PC program decides; this tab shows it and changes only what its config allows)
+autoTab:Line("What it does for " .. LP.Name)
+local apStatus = autoTab:Paragraph("Waiting for the autopilot on the PC.")
+autoTab:Line("Focus")
+local apCfg = core.readJson(autopilot.CONFIG) or {}
+local focusNames = {}
+for _, f in ipairs(autopilot.FOCUSES) do table.insert(focusNames, autopilot.FOCUS_NAMES[f]) end
+local focusById = {} for _, f in ipairs(autopilot.FOCUSES) do focusById[autopilot.FOCUS_NAMES[f]] = f end
+local focusReady = false
+local focusRow = autoTab:RadioButtons("What to go for", focusNames, function(v)
+	if not focusReady or PREVIEW then return end
+	if not autopilot.editable(apCfg, "focus") then lib:Notification("Not saved", "The autopilot config has no editable focus yet.", nil, "Okay") return end
+	autopilot.setOverride("focus", focusById[v])
+end)
+focusRow:Set(autopilot.FOCUS_NAMES[apCfg.focus or "auto"] or "Auto", true)
+focusReady = true
+autoTab:Label("Auto = the autopilot picks (luck first while cheap luck is open, then packs). The PC takes a change within 5 minutes.")
+autoTab:Line("Quick jobs")
+local apJobs = autoTab:Paragraph("")
+autoTab:Line("Which jobs it may plan")
+for _, job in ipairs({ "claims", "equips", "upgrades", "explorations", "crafting", "potions", "packs", "moon_rolls", "levelling", "trait_rolls", "story" }) do
+	local key = "jobs." .. job .. ".allowed"
+	if autopilot.editable(apCfg, key) then
+		local on = type(apCfg.jobs) == "table" and type(apCfg.jobs[job]) == "table" and apCfg.jobs[job].allowed == true
+		autoTab:Toggle(job:gsub("_", " "):gsub("^%l", string.upper), on, function(v) if not PREVIEW then autopilot.setOverride(key, v) end end)
+	end
+end
+if autopilot.editable(apCfg, "accounts." .. LP.Name .. ".new_account_mode") then
+	local acc = type(apCfg.accounts) == "table" and apCfg.accounts[LP.Name] or {}
+	autoTab:Toggle("New-account mode (story first, packs only in a good moon)", acc.new_account_mode == true, function(v)
+		if not PREVIEW then autopilot.setOverride("accounts." .. LP.Name .. ".new_account_mode", v) end
+	end)
+end
+autoTab:Line("Account")
+autoTab:Button("Read this account now (read only)", function()
+	if PREVIEW then lib:Notification("Preview only", "Nothing starts from this window.", nil, "Okay") return end
+	local ok, src = pcall(readfile, autopilot.READER)
+	if not ok then lib:Notification("Missing", autopilot.READER .. " is not in the workspace yet.", nil, "Okay") return end
+	local fn = loadstring(src)
+	if fn then task.spawn(fn) end
+	lib:Notification("Account read", "Reading " .. LP.Name .. " (sends nothing). The PC uses it on its next round.", nil, "Okay")
+end)
+local apLive = autoTab:Label("")
+autoTab:Button("Start the runner (only approved jobs)", function()
+	if PREVIEW then lib:Notification("Preview only", "Nothing starts from this window.", nil, "Okay") return end
+	local st = core.readJson(autopilot.STATUS)
+	if #autopilot.approved(st) == 0 then lib:Notification("Nothing approved", "No job is approved for live play yet. Only Sami's yes in the PC config turns one on.", nil, "Okay") return end
+	local ok, src = pcall(readfile, autopilot.RUNNER)
+	if not ok then lib:Notification("Missing", autopilot.RUNNER .. " is not in the workspace yet.", nil, "Okay") return end
+	local fn = loadstring(src)
+	if fn then task.spawn(fn) end
+end)
+autoTab:Button("Stop the runner", function() _G.__AP_STOP = true end)
+
+-- Joyride: a slot for Sami's own script. The autopilot never builds, runs or plans Joyride.
+joyTab:Line("Joyride")
+joyTab:Label("Your own Joyride script runs on its own. The autopilot does not touch Joyride.")
+
 -- Status
 local stLabel = statusTab:Label("Stopped")
 local statLabel = statusTab:Label("")
@@ -356,7 +418,7 @@ local logLabel = statusTab:Label("")
 -- Settings
 setTab:Button("Dark theme", function() cfg.theme = "Dark" save() lib:ChangeTheme("Dark") end)
 setTab:Button("Light theme", function() cfg.theme = "Light" save() lib:ChangeTheme("Light") end)
-setTab:Bind("Show / hide window", lib.ToggleKey, false, true, function() end)
+setTab:Label("Show / hide the window: " .. lib.ToggleKey.Name .. ". Drag the bottom-right corner to resize.")
 setTab:Textbox("Accounts it may run on (comma list)", false, false, function(v) cfg.account = v save() end):Set(cfg.account)
 setTab:Toggle("Anti-AFK (small step every 10 min)", cfg.antiAfk, function(v) cfg.antiAfk = v save() end)
 setTab:Label("This window is for " .. LP.Name .. ". Each account keeps its own settings and deck plans.")
@@ -373,6 +435,14 @@ task.spawn(function()
 			core.ctx and string.format(" · game memory %d MB", core.mem()) or ""))
 		logLabel:SetText(table.concat(core.log, "\n", 1, math.min(#core.log, 12)))
 		plStatus:SetText(planner.statusText(core.readJson(planner.STATUS)))
+		local apSt = core.readJson(autopilot.STATUS)
+		apStatus:SetText(autopilot.statusText(apSt, LP.Name))
+		apJobs:SetText(autopilot.jobsText(apSt, LP.Name))
+		local appr = autopilot.approved(apSt)
+		apLive:SetText(#appr > 0 and ("Approved for live play: " .. table.concat(appr, ", ")) or "Approved for live play: nothing yet (plan only).")
+		local bar = (running and ("Farm: " .. tostring(core.status)) or "Farm stopped")
+		local apBar = autopilot.barText(apSt, LP.Name)
+		win:Status(apBar and (bar .. "  ·  " .. apBar) or bar, running and Color3.fromRGB(71, 200, 140) or nil)
 		if core.ctx then
 			local ok, bp = pcall(core.backpack, "main")
 			if ok then

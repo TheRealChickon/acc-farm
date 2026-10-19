@@ -1,7 +1,10 @@
 # Card Clash Farm
 
-Auto farm for Anime Card Clash with a window (Sami's old "dawidlib" look, rebuilt: drag it by the title bar,
-resize from the bottom-right corner, `–` to fold it, RightControl to hide or show it).
+Auto farm for Anime Card Clash with a window built on Sami's own UI library (`src/ui.lua` = his "dawidlib
+LabelModdedNewFunc", modified: the window sizes itself to its tabs and content, resize it from the bottom-right corner, a
+status bar under every tab, the tab list scrolls, RightControl hides or shows it, the red button hides instead of closing,
+no more per-frame repainting, and every element returns an object with `:Set` / `:Get`). `src/ui.lua` also works on its
+own: `local lib = loadstring(source)()`.
 
 ## Start it
 
@@ -81,6 +84,16 @@ farm moves on to other towers "until it gets hard" by itself.
 `climb_decks.json`, `story_plan.json`) and your own `acc-farm/decks.json`; with nothing stored it keeps Deck 15 as it is.
 **Timed starts** asks the PC helpers (`tower_watcher.py`, `story_scan_watcher.py`) for a winning start second.
 
+## Autopilot tab (account autopilot, plan only)
+
+Shows what the PC autopilot (`tasks/2026-10-19-account-autopilot` in the project) decided for this account: now, next,
+why, conditions, the focus and the quick jobs. You can change the **focus** (Auto / Luck index / Trait rerolls / Packs),
+switch jobs on or off and turn on new-account mode; each change goes to `AnimeCardClash/autopilot_overrides.json` and the
+PC takes it within 5 minutes (only keys its config lists as editable). **Read this account now** runs the read-only
+account read. **Start the runner** only runs jobs Sami approved in the PC config; with nothing approved it refuses. The
+status bar under every tab shows the farm and the autopilot. The **Joyride** tab is a slot only: the autopilot never
+touches Joyride.
+
 ## Not done yet
 
 Ranked, Tower of Deity and the Chainsaw event need one live look first (their commands need data the game only shows
@@ -89,5 +102,5 @@ live). **Probe** on the "Dailies & events" tab saves that data to `acc-farm/prob
 ## For changes
 
 - `src/` modules, `loader.lua` loads `dist/acc-farm.lua` (all modules in one file).
-- After editing: `python3 tools/bundle.py` (rebuilds `dist/`), then `luau tests/run.luau` (fake game, runs hours of farming in a second).
+- After editing: `python3 tools/bundle.py` (rebuilds `dist/`), then `luau tests/run.luau` or `lune run tests/run.luau` (fake game, runs hours of farming in a second).
 - After a game update: `python3 tools/build_data.py <macro/data/towers.json> <macro/data/story.json>` rebuilds `src/data.lua`.
